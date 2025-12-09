@@ -1,6 +1,6 @@
 from itertools import combinations
 from typing import Generator, List, Set, Tuple
-from networkx import all_simple_edge_paths, edge_subgraph, subgraph, DiGraph, Graph
+from networkx import all_simple_edge_paths, edge_subgraph, DiGraph, Graph
 
 
 class ProcessExecution(DiGraph):
@@ -34,7 +34,9 @@ class ProcessExecution(DiGraph):
             if isinstance(a, dict):
                 edge_type = a.get("type")
                 edge_qualifier = a.get("qualifier")
-                data["label"] = f"{edge_type}_{edge_qualifier}" if edge_qualifier else edge_type
+                data["label"] = (
+                    f"{edge_type}_{edge_qualifier}" if edge_qualifier else edge_type
+                )
 
     def select_node_attr(G: Graph, attr_key: str):
         """
@@ -82,39 +84,21 @@ class ProcessExecution(DiGraph):
             )
 
 
-def check_event_object_qualifier(
-    G: Graph, event: str, obj: str, event_object_qualifiers: List[str] = []
-) -> bool:
-    for u, v, d in G.out_edges(event, data=True):
-        edge_type = d["attr"].get("type")
-        qualifier = d["attr"].get("qualifier")
-        activity = G.nodes()[event]["attr"].get("ocel:activity")
-        if (
-            (edge_type == "E2O")
-            and (v == obj)
-            and (
-                (qualifier in event_object_qualifiers)
-                or (activity, qualifier) in event_object_qualifiers
-            )
-        ):
-            return True
-    return False
-
-
 def extract_process_execution(
     G: Graph,
     source_event: str,
-    event_object_qualifiers: List[str] = [],
+    object_types: List[str],
     target_activity_type: str = None,
 ) -> ProcessExecution:
     """
     G (Graph): NetworkX OCEL graph to extract process execution from;
     source_event (str): source event node to trace from;
-    event_object_qualifiers (List[str|Tuple[str]]): list of event-object relationship qualifiers used to select objects for which to extract the process execution.
+    object_types (List[str]): object typese to consider for the trace;
     target_activity_type (str): activity type to end the trace;
     """
     events_to_check = [source_event]
     nodes_traced = set()
+    edges_traced = set()
     while events_to_check:
         event = events_to_check.pop()
         nodes_traced.add(event)
@@ -126,33 +110,38 @@ def extract_process_execution(
             continue
 
         # Add objects related to event to trace
-        trace_objects = [
-            e[1]
-            for e in list(G.out_edges(event, data=True))
-            if e[-1]["attr"].get("type") == "E2O"
+        edges_event_object = [
+            (u, v, k)
+            for u, v, k, d in list(G.out_edges(event, keys=True, data=True))
+            if d["attr"].get("type") == "E2O"
         ]
-        nodes_traced.update(trace_objects)
+        edges_traced.update(edges_event_object)
 
-        trace_df_edges = [
-            e
-            for e in list(G.in_edges(event, data=True))
-            if e[-1]["attr"].get("type") == "DF"
+        trace_objects = [v for u, v, k in edges_event_object]
+
+        selected_objects = [
+            o for o in trace_objects if G.nodes("attr")[o].get("ocel:type", "") in object_types
         ]
 
-        # Filter traced events based on qualifier and activity
-        selected_trace_events = set(
-            [
-                u
-                for u, v, d in trace_df_edges
-                if check_event_object_qualifier(
-                    G, u, d["attr"]["object"], event_object_qualifiers
-                )
+        # Prefer aggregation DF relationships
+        edges_df = [
+            (u, v, k)
+            for u, v, k, d in list(G.in_edges(event, keys=True, data=True))
+            if (d["attr"].get("type") == "DF_agg")
+            and (d["attr"].get("object", "") in selected_objects)
+        ]
+        if not edges_df:
+            edges_df = [
+                (u, v, k)
+                for u, v, k, d in list(G.in_edges(event, keys=True, data=True))
+                if (d["attr"].get("type") == "DF")
+                and (d["attr"].get("object", "") in selected_objects)
             ]
-        )
+        edges_traced.update(edges_df)
 
-        events_to_check.extend(list(selected_trace_events - nodes_traced))
+        events_to_check.extend(list(set([u for u, v, k in edges_df]) - nodes_traced))
 
-    return ProcessExecution(subgraph(G, nodes_traced))
+    return ProcessExecution(edge_subgraph(G, edges_traced))
 
 
 def check_edges_normalize(edges: List[Tuple[str]], normalize_events: List[str]) -> bool:

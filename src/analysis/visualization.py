@@ -1,6 +1,6 @@
 import json
 
-from networkx import DiGraph, nx_agraph, spring_layout
+from networkx import DiGraph, nx_agraph
 from process_execution import ProcessExecution
 
 def apply_node_styles_nx(
@@ -74,7 +74,7 @@ def apply_edge_styles_nx(
     G: ProcessExecution
 ):
     for u, v, ed in G.edges(data=True):
-        if ed["attr"].get("type", "") == "DF":
+        if ed["attr"].get("type", "") in ("DF", "DF_agg"):
             ed["style"] = "solid"
         else:
             ed["style"] = "dashed"
@@ -201,7 +201,7 @@ def visualize_with_svg_and_js(trace_graph: ProcessExecution, normalized_subgraph
         // Create highlight buttons
         highlightConfigs.forEach((config, idx) => {{
             const btn = document.createElement('button');
-            btn.textContent = `Highlight ${{idx + 1}}`;
+            btn.textContent = `Normalized ${{idx + 1}}`;
             btn.onclick = () => applyHighlight(idx, btn);
             controls.appendChild(btn);
         }});
@@ -241,7 +241,7 @@ def visualize_with_svg_and_js(trace_graph: ProcessExecution, normalized_subgraph
                 document.querySelectorAll('g[class="node"]').forEach(elem => {{
                     const title = elem.querySelector('title');
                     const ellipse = elem.querySelector('ellipse');
-                    if (title && title.textContent.includes(nodeStr)) {{
+                    if (title && title.textContent === nodeStr) {{
                         ellipse.style.stroke = '#ff7f0e';
                         ellipse.style.strokeWidth = '3';
                     }}
