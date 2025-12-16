@@ -1,40 +1,41 @@
 # Convert trace_graphs -> PyG Data objects (include node and edge attributes),
 # define a GNN that uses node features + aggregated edge features, and train it.
-import torch
+import json
 import numpy as np
 import networkx as nx
+import torch
+
 from sklearn.model_selection import train_test_split
-
-try:
-    from torch_geometric.data import Data
-    from torch_geometric.loader import DataLoader
-    from torch_geometric.nn import GCNConv, global_mean_pool
-except Exception:
-    raise ImportError(
-        "Install torch_geometric to run this cell: https://pytorch-geometric.readthedocs.io/"
-    )
+from torch_geometric.data import Data
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import GCNConv, global_mean_pool
+from typing import Dict, List, Tuple
 
 
-def _unwrap_graph(obj):
-    if isinstance(obj, (nx.Graph, nx.DiGraph, nx.MultiDiGraph, nx.MultiGraph)):
-        return obj
-    if hasattr(obj, "g"):
-        return getattr(obj, "g")
-    if hasattr(obj, "graph"):
-        return getattr(obj, "graph")
-    # as a last resort, try to use the object itself if it behaves like a graph
-    raise TypeError("Unsupported graph object")
+def build_vocab_and_numeric_keys(
+    trace_graphs: Dict[str, nx.Graph],
+    output_path: str = None,
+) -> Tuple[List[str], List[str], List[str]]:
+    """
+    Build node label vocabulary and identify numeric attribute keys for nodes and edges.
 
+    Args:
+        trace_graphs (Dict[str, nx.Graph]): Dictionary mapping event IDs to their corresponding process execution graphs.
+            {"process_execution": nx.Graph, "class": bool}
 
-def build_vocab_and_numeric_keys(trace_graphs):
+    Returns:
+        Tuple[List[str], List[str], List[str]]:
+            - List of unique node labels.
+            - List of numeric attribute keys for nodes.
+            - List of numeric attribute keys for edges.
+    """
     node_labels = set()
     node_numeric_keys = set()
     edge_numeric_keys = set()
     for k, v in trace_graphs.items():
-        proc = v.get("process_execution")
-        if proc is None:
+        G = v.get("process_execution")
+        if G is None:
             continue
-        G = _unwrap_graph(proc)
         for _, d in G.nodes(data=True):
             lab = d.get("label") or d.get("node_label") or d.get("nlabel")
             if lab is not None:
@@ -51,14 +52,42 @@ def build_vocab_and_numeric_keys(trace_graphs):
                 for kk, vv in eattr.items():
                     if isinstance(vv, (int, float)):
                         edge_numeric_keys.add(kk)
+
+        if output_path:
+            with open(output_path, "w") as f:
+                json.dump(
+                    {
+                        "node_labels": sorted(node_labels),
+                        "node_numeric_keys": sorted(node_numeric_keys),
+                        "edge_numeric_keys": sorted(edge_numeric_keys),
+                    },
+                    f,
+                )
     return sorted(node_labels), sorted(node_numeric_keys), sorted(edge_numeric_keys)
 
-def convert_trace_graphs_to_pyg(trace_graphs, node_label_vocab, node_num_keys, edge_num_keys):
+
+def convert_trace_graphs_to_pyg(
+    trace_graphs, node_label_vocab, node_num_keys, edge_num_keys
+) -> List[Data]:
+    """
+    Convert trace graphs to PyTorch Geometric Data objects.
+
+    Args:
+        trace_graphs (Dict[str, nx.Graph]): Dictionary mapping event IDs to their corresponding process execution graphs.
+            {"process_execution": nx.Graph, "class": bool}
+        node_label_vocab (List[str]): List of node labels for one-hot encoding.
+        node_num_keys (List[str]): List of numeric attribute keys for nodes.
+        edge_num_keys (List[str]): List of numeric attribute keys for edges.
+
+    Returns:
+        List[Data]: List of PyTorch Geometric Data objects.
+    """
+
     label_to_idx = {l: i for i, l in enumerate(node_label_vocab)}
 
     data_list = []
     for gid, v in trace_graphs.items():
-        G = _unwrap_graph(v["process_execution"])
+        G = v["process_execution"]
         # node features: one-hot label + numeric attrs
         node_list = list(G.nodes())
         node_feat = []
@@ -133,13 +162,32 @@ def convert_trace_graphs_to_pyg(trace_graphs, node_label_vocab, node_num_keys, e
 
 
 class GCNWithEdgeAgg(torch.nn.Module):
+    """
+    A simple Graph Convolutional Network (GCN) for graph classification that uses node features
+    augmented with aggregated edge attributes.
+
+    Arguments:
+        in_channels (int): Number of input features per node.
+        hidden (int): Number of hidden units in the GCN layers. Default is 64.
+        num_classes (int): Number of output classes for classification. Default is 2.
+    """
+
     def __init__(self, in_channels, hidden=64, num_classes=2):
         super().__init__()
         self.conv1 = GCNConv(in_channels, hidden)
         self.conv2 = GCNConv(hidden, hidden)
         self.lin = torch.nn.Linear(hidden, num_classes)
 
-    def forward(self, x, edge_index, batch):
+    def forward(self, x, edge_index, batch) -> torch.Tensor:
+        """
+        Forward pass of the GCN.
+        Args:
+            x (torch.Tensor): Node feature matrix.
+            edge_index (torch.Tensor): Edge index tensor.
+            batch (torch.Tensor): Batch vector, which assigns each node to a specific graph in the batch.
+        Returns:
+            torch.Tensor: Output logits for each graph in the batch.
+        """
         x = self.conv1(x, edge_index)
         x = torch.nn.functional.relu(x)
         x = self.conv2(x, edge_index)
@@ -147,7 +195,17 @@ class GCNWithEdgeAgg(torch.nn.Module):
         return self.lin(x)
 
 
-def train_epoch(model, loader, opt, device):
+def train_epoch(model, loader, opt, device) -> float:
+    """
+    Train the GCN model for one epoch.
+    Args:
+        model (torch.nn.Module): The GCN model to train.
+        loader (DataLoader): DataLoader for the training data.
+        opt (torch.optim.Optimizer): Optimizer for training.
+        device (str): Device to run the training on ('cpu' or 'cuda').
+    Returns:
+        float: Average loss over the epoch.
+    """
     model.train()
     total = 0.0
     for batch in loader:
@@ -161,7 +219,16 @@ def train_epoch(model, loader, opt, device):
     return total / len(loader.dataset)
 
 
-def evaluate_acc(model, loader, device):
+def evaluate_acc(model, loader, device) -> Tuple[float, float, List[int], List[int]]:
+    """
+    Evaluate the GCN model on the given data loader.
+    Args:
+        model (torch.nn.Module): The GCN model to evaluate.
+        loader (DataLoader): DataLoader for the evaluation data.
+        device (str): Device to run the evaluation on ('cpu' or 'cuda').
+    Returns:
+        Tuple[float, float, List[int], List[int]]: Accuracy, F1 score, true labels, predicted labels.
+    """
     model.eval()
     ys, ps = [], []
     with torch.no_grad():
@@ -179,148 +246,30 @@ def evaluate_acc(model, loader, device):
     return acc, f1, ys, ps
 
 
-import os
-import json
-
-
-def load_graphml_with_json_attrs(path: str) -> nx.Graph:
-    """Read a GraphML file and attempt to JSON-decode any string attributes back into Python objects.
-
-    Only replaces attribute values when json.loads returns a dict or list (to avoid converting plain strings).
-    Works for Graph/DiGraph and MultiGraph/MultiDiGraph edge representations.
+def train_gnn_graph_classification(
+    graphs: Dict[str, nx.Graph], model_path: str = None, model_weights_path: str = None
+):
     """
-    G = nx.read_graphml(path)
-
-    # Nodes
-    for n, d in G.nodes(data=True):
-        for k, v in list(d.items()):
-            if isinstance(v, str):
-                try:
-                    parsed = json.loads(v)
-                    if isinstance(parsed, (dict, list)):
-                        d[k] = parsed
-                except Exception:
-                    # leave as string if it isn't JSON
-                    pass
-
-    # Edges (handle keyed MultiGraphs and non-keyed graphs)
-    try:
-        edges = list(G.edges(keys=True, data=True))
-        keyed = True
-    except TypeError:
-        edges = list(G.edges(data=True))
-        keyed = False
-
-    if keyed:
-        for u, v, key, ed in edges:
-            for k, val in list(ed.items()):
-                if isinstance(val, str):
-                    try:
-                        parsed = json.loads(val)
-                        if isinstance(parsed, (dict, list)):
-                            ed[k] = parsed
-                    except Exception:
-                        pass
-    else:
-        for u, v, ed in edges:
-            for k, val in list(ed.items()):
-                if isinstance(val, str):
-                    try:
-                        parsed = json.loads(val)
-                        if isinstance(parsed, (dict, list)):
-                            ed[k] = parsed
-                    except Exception:
-                        pass
-
-    return G
-
-
-if __name__ == "__main__":
-    path = "data/scenario_test_ocel.json"
-
-    # Load the graphml and parse JSON attributes back
-    graphml_path = path.replace(".json", ".graphml")
-    if os.path.exists(graphml_path):
-        ocel_nx = load_graphml_with_json_attrs(graphml_path)
-        print(
-            f"Loaded GraphML from {graphml_path} — nodes={ocel_nx.number_of_nodes()} edges={ocel_nx.number_of_edges()}"
-        )
-    else:
-        print(f"GraphML file not found: {graphml_path}")
-
-
-    from collections import Counter
-    from pm4py import read_ocel2_json
-
-    from process_execution import extract_process_execution
-
-
-    ocel = read_ocel2_json(path)
-
-    df_events = ocel.events.copy()
-    df_events.set_index("ocel:eid", inplace=True)
-    df_relations = ocel.relations.copy()
-    df_relations.set_index("ocel:eid", inplace=True)
-
-    df_events_objects = df_events.join(df_relations, rsuffix="_relations")
-    object_types = ["PackingUnit"]
-
-    events_to_trace = df_events_objects[
-        (df_events_objects["ocel:type"].isin(object_types))
-    ].index.values
-
-    print(
-        f"Number of events selected to extract process execution for: {len(events_to_trace)}"
-    )
-
-
-    def determine_class_quality(event: str):
-        return ocel_nx.nodes()[event]["attr"].get("averageQuality") >= 1.0
-
-
-    def determine_class_attribute(trace_graph: nx.Graph):
-        selected_activity = "Object-departing-WB"
-        selected_attribute = "a"
-        for _, data in trace_graph.nodes(data="attr"):
-            if (
-                data.get("ocel:activity", "") == selected_activity
-                and data.get(selected_attribute, 1) < 0.25
-            ):
-                return False
-        return True
-
-
-    # Extract process executions
-    trace_graphs = {}
-    for event in events_to_trace:
-        trace_graph = extract_process_execution(
-            ocel_nx,
-            event,
-            ["ProductionLot", "PackingUnit"],
-            "Object-creating_class_instance",
-        )
-        trace_graph.construct_node_label()
-        trace_graph.construct_edge_label()
-
-        trace_graphs[event] = {
-            "process_execution": trace_graph,
-            # "class": determine_class_quality(event),
-            "class": determine_class_attribute(trace_graph),
-        }
-    print(Counter([d["class"] for d in trace_graphs.values()]))
-
+    Train a GNN for graph classification on process execution graphs.
+    Args:
+        graphs (Dict[str, nx.Graph]): Dictionary of process execution graphs.
+        model_path (str): Path to save the full model.
+        model_weights_path (str): Path to save the model weights.
+    """
 
     # Build dataset
     node_label_vocab, node_num_keys, edge_num_keys = build_vocab_and_numeric_keys(
-        trace_graphs
+        graphs
     )
     print("node_label_vocab:", node_label_vocab)
     print("node_num_keys:", node_num_keys)
     print("edge_num_keys:", edge_num_keys)
 
-    data_list = convert_trace_graphs_to_pyg(trace_graphs, node_label_vocab, node_num_keys, edge_num_keys)
+    data_list = convert_trace_graphs_to_pyg(
+        graphs, node_label_vocab, node_num_keys, edge_num_keys
+    )
     if len(data_list) == 0:
-        raise RuntimeError("No graphs found in trace_graphs")
+        raise RuntimeError("No graphs found in graphs")
 
     labels = [int(d.y.item()) for d in data_list]
     train_idx, test_idx = train_test_split(
@@ -354,21 +303,11 @@ if __name__ == "__main__":
                 f"Epoch {epoch:02d} loss={loss:.4f} val_acc={val_acc:.4f} val_f1={val_f1:.4f}"
             )
 
-    train_acc, train_f1, train_y, train_p = evaluate_acc(model, train_loader, device)
-
     test_acc, test_f1, test_y, test_p = evaluate_acc(model, test_loader, device)
     print("Final test acc:", test_acc, "test f1:", test_f1)
 
-    # Save model weights
-    torch.save(model.state_dict(), path.replace(".json", "-model_weights.pth"))
-
-    # Save predictions
-    train_events = [list(trace_graphs.keys())[i] for i in train_idx]
-    val_events = [list(trace_graphs.keys())[i] for i in val_idx]
-    test_events = [list(trace_graphs.keys())[i] for i in test_idx]
-
-    from pandas import Series
-
-    Series(
-        index=train_events + val_events + test_events, data=train_p + val_p + test_p
-    ).to_csv(path.replace(".json", "-gnn_predictions.csv"))
+    # Save model (weights)
+    if model_path:
+        torch.save(model, model_path)
+    if model_weights_path:
+        torch.save(model.state_dict(), model_weights_path)
