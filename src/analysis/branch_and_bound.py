@@ -1,9 +1,13 @@
 import logging
+import logging.handlers
+import multiprocessing as mp
 
 from copy import deepcopy
+from numpy import inf
+from queue import Empty
 from typing import Any, Dict, Iterable, List, Tuple
 
-from process_execution import ProcessExecution
+from .process_execution import ProcessExecution
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +25,10 @@ class Feature:
 class NodeAttributeNumeric(Feature):
     """
     Feature representing a node attribute that can be modified.
-
     Attributes:
         node_id (str): The ID of the node whose attribute is being modified.
         attribute_name (str): The name of the attribute to be modified.
         value_range (Iterable): The range of possible values for the attribute.
-        value_default (int|float|complex): The default value of the attribute.
     """
 
     def __init__(
@@ -45,21 +47,39 @@ class NodeAttributeNumeric(Feature):
     def __str__(self) -> str:
         return f"{self.node_id} - {self.attribute_name} {self.value_range}"
 
-    def action_space(self, current_change: int | float | complex) -> Iterable:
+    def action_space(self, current_change: int | float | complex) -> Iterable[int | float | complex]:
         """
         Generate possible values for the node attribute feature.
+        Args:
+            current_change (int | float | complex): The current change value for the attribute.
+        Yields:
+            Iterable[int | float | complex]: Possible values for the attribute.
         """
         for v in self.value_range:
             if v >= current_change:
                 yield v
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
+        """
+        Apply the attribute value change to the process execution.
+        Args:
+            p (ProcessExecution): The process execution to modify.
+            delta_value (Any): The value to add to the current attribute value.
+        Returns:
+            ProcessExecution: The modified process execution.
+        """
         p.nodes()[self.node_id]["attr"][self.attribute_name] += delta_value
         return p
 
 
 class ObjectSubstitutions(Feature):
-    """ """
+    """
+    Feature representing possible object node substitutions in a process execution.
+    Attributes:
+        substitution_options (Iterable[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]): 
+            An iterable of lists of substitution options, where each substitution option is a tuple
+            containing the original node (ID and attributes) and the substitute node (ID and attributes).
+    """
 
     def __init__(
         self,
@@ -76,7 +96,13 @@ class ObjectSubstitutions(Feature):
     def action_space(
         self, current_change
     ) -> Iterable[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]:
-        """ """
+        """
+        Generate possible substitution options for the object node feature.
+        Args:
+            current_change: The current substitution option.
+        Yields:
+            Iterable[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]: Possible substitution options.
+        """
         for v in self.substitution_options:
             if len(v) >= len(current_change):
                 yield v
@@ -113,14 +139,13 @@ class ObjectSubstitutions(Feature):
 class Action:
     """
     Class representing a set of changes (actions) to be applied to a process execution.
-
     Attributes:
         event_deletion (List[str]): List of event IDs to remove.
         event_insertion (List[str]): List of event IDs to add.
-        object_substitution (List[Tuple[Tuple[str, dict], Tuple[str, dict]]): List of object nodes to substitute
+        object_substitution (Dict[ObjectSubstitutions, List[Tuple[Tuple[str, dict], Tuple[str, dict]]]): Dictionary mapping object substitutions options to the selected substitutions.
         relation_deletion (List[Tuple[str, str]]): List of relation tuples to remove.
         relation_insertion (List[Tuple[str, str]]): List of relation tuples to add.
-        node_attributes_modification (Dict[NodeAttributeNumeric, Any]): Dictionary mapping node attribute features to their new values.
+        node_attributes_modification (Dict[NodeAttributeNumeric, Any]): Dictionary mapping node attribute features to their change value.
     """
 
     def __init__(
@@ -196,7 +221,7 @@ class Action:
 
     def objective_value(self) -> int:
         """
-        Calculate the objective value of the action, defined as the total number of non-default changes.
+        Calculate the objective value of the action, defined as the total number changes.
         Returns:
             int: The objective value of the action.
         """
@@ -239,15 +264,26 @@ class Action:
 
 
 class BranchAndBoundCounterFactual:
+    """
+    Class implementing the Branch and Bound algorithm to find counterfactual actions.
+    Attributes:
+        max_changes (int): Maximum number of allowed changes in the action.
+        counterfactual_label (bool): Desired outcome label for the counterfactual.
+        process_outcome (callable): Function to determine the outcome of a process execution.
+        num_workers (int): Number of parallel worker processes to use.
+    """
+
     def __init__(
         self,
         process_outcome: callable,
         max_changes: int,
         counterfactual_label: bool,
+        num_workers: int = 1,
     ):
         self.max_changes = max_changes
         self.counterfactual_label = counterfactual_label
         self.process_outcome = process_outcome
+        self.num_workers = num_workers
 
     def select_feature(self, available_features: List[Feature]) -> Feature | None:
         """
@@ -262,57 +298,145 @@ class BranchAndBoundCounterFactual:
         except IndexError:
             return None
 
-    def enumerate(
-        self,
-        action: Action,
-        available_features: List[Feature],
-        fixed_features: List[Feature],
-        process_execution: ProcessExecution,
-        selected_actions: List[Action],
-    ):
+    def find_counterfactuals(
+        self, process_execution: ProcessExecution, available_features: List[Feature]
+    ) -> List[Action]:
         """
-        Recursively enumerate possible actions to find counterfactuals.
+        Find counterfactual actions using multiprocessing.
         Args:
-            action (Action): The current action being evaluated.
-            available_features (List[Feature]): List of features that can still be modified.
-            fixed_features (List[Feature]): List of features that have already been fixed.
             process_execution (ProcessExecution): The original process execution.
-            selected_actions (List[Action]): List to store found counterfactual actions.
+            available_features (List[Feature]): List of available features.
+        Returns:
+            List[Action]: List of found counterfactual actions.
         """
-        logger.debug("-" * 20)
-        logger.debug(action)
+        task_queue = mp.Queue()
+        result_queue = mp.Queue()
+        log_queue = mp.Queue()
 
-        if (action.action_size() > self.max_changes) or any(
-            action.objective_value() >= selected_action.objective_value()
-            for selected_action in selected_actions
-        ):
-            return
+        action = Action()
+        fixed_features = []
+        task_queue.put(
+            (action, available_features[:], fixed_features[:], process_execution)
+        )
 
-        process_execution_c = action.apply_changes(deepcopy(process_execution))
-        outcome_c = self.process_outcome(process_execution_c)
-        logger.debug("Counterfactual outcome: %s", outcome_c)
-        if outcome_c == self.counterfactual_label:
-            selected_actions.append(deepcopy(action))
-            return
+        queue_handler = logging.handlers.QueueHandler(log_queue)
+        logger.addHandler(queue_handler)
+        log_listener = mp.Process(target=self._log_listener, args=(log_queue,))
+        log_listener.start()
 
-        selected_feature = self.select_feature(available_features)
-        if not selected_feature:
-            return
+        processes = []
+        min_objective_value = mp.Value("f", inf)
+        try:
+            for _ in range(self.num_workers):
+                p = mp.Process(
+                    target=self._branch_and_bound_worker,
+                    args=(task_queue, result_queue, min_objective_value),
+                )
+                p.start()
+                processes.append(p)
 
-        fixed_features.append(selected_feature)
+            for p in processes:
+                p.join()
 
-        for value in selected_feature.action_space(
-            action.get_change_value(selected_feature)
-        ):
-            action_prime = deepcopy(action)
-            logger.debug("%s: %s", selected_feature, value)
+            log_listener.terminate()
 
-            action_prime.set_change_value(selected_feature, value)
-            self.enumerate(
-                action_prime,
-                available_features,
-                fixed_features,
-                process_execution,
-                selected_actions,
-            )
-        logger.debug("-" * 50)
+            # Collect results
+            selected_actions = []
+            min_objective_value = inf
+            while not result_queue.empty():
+                selected_action = result_queue.get()
+                objective_value = selected_action.objective_value()
+                if objective_value <= min_objective_value:
+                    min_objective_value = objective_value
+                    selected_actions.append((selected_action, objective_value))
+
+            return [a for a, v in selected_actions if v == min_objective_value]
+
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt received. Terminating all processes...")
+            for p in processes:
+                if p.is_alive():
+                    p.terminate()
+                    p.join(timeout=1.0)  # Wait up to 1 second for process to terminate
+                    if p.is_alive():
+                        p.kill()  # Force kill if still alive
+            log_listener.terminate()
+
+            task_queue.close()
+            result_queue.close()
+            log_queue.close()
+
+            raise
+
+    def _branch_and_bound_worker(
+        self,
+        task_queue: mp.Queue,
+        result_queue: mp.Queue,
+        min_objective_value,
+    ):
+        """Worker process for parallel branch and bound.
+         Args:
+            task_queue (mp.Queue): Queue containing tasks to process.
+            result_queue (mp.Queue): Queue to store found counterfactual actions.
+            min_objective_value (mp.Value): Shared value for the minimum objective value found.
+        """
+
+        while True:
+            logger.info("Queue size: %s", task_queue.qsize())
+            try:
+                action, available_features, fixed_features, process_execution = (
+                    task_queue.get(timeout=1)
+                )
+            except Empty:
+                break
+
+            # Prune branches that exceed max changes or current best objective value
+            if (action.action_size() > self.max_changes) or (
+                action.objective_value() >= min_objective_value.value
+            ):
+                continue
+
+            process_execution_c = action.apply_changes(deepcopy(process_execution))
+            outcome_c = self.process_outcome(process_execution_c)
+            logger.debug("""%s\nCounterfactual outcome: %s""", action, outcome_c)
+
+            # Check if counterfactual condition is met
+            if outcome_c == self.counterfactual_label:
+                with min_objective_value.get_lock():
+                    min_objective_value.value = action.objective_value()
+                result_queue.put(deepcopy(action))
+                continue
+
+            # Select next feature to explore
+            selected_feature = self.select_feature(available_features)
+            if not selected_feature:
+                continue
+            fixed_features.append(selected_feature)
+
+            # Explore all possible values for the selected feature
+            for value in selected_feature.action_space(
+                action.get_change_value(selected_feature)
+            ):
+                action_prime = deepcopy(action)
+                action_prime.set_change_value(selected_feature, value)
+                logger.debug("%s: %s", selected_feature, value)
+
+                task_queue.put(
+                    (
+                        action_prime,
+                        available_features[:],
+                        fixed_features[:],
+                        process_execution,
+                    )
+                )
+
+    def _log_listener(self, log_queue: mp.Queue):
+        """
+        Logging listener process to handle log records from worker processes.
+        Args:
+            log_queue (mp.Queue): Queue containing log records.
+        """
+        while True:
+            record = log_queue.get()
+            logger = logging.getLogger(record.name)
+            logger.handle(record)
