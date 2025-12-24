@@ -1,0 +1,1819 @@
+{
+  "eventTypes": [
+    {
+      "name": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Object-arriving-WT",
+      "attributes": [
+        {
+          "name": "amount",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Transformation-assembling-WT",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "type": "string"
+        },
+        {
+          "name": "outputQuantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Object-departing-WT",
+      "attributes": [
+        {
+          "name": "quantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Aggregation-DELETE",
+      "attributes": []
+    },
+    {
+      "name": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "type": "string"
+        },
+        {
+          "name": "outputQuantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Object-arriving-WB",
+      "attributes": [
+        {
+          "name": "amount",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Transformation-assembling-WB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "type": "string"
+        },
+        {
+          "name": "outputQuantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Object-departing-WB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "type": "integer"
+        }
+      ]
+    },
+    {
+      "name": "Aggregation-ADD",
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "type": "float"
+        }
+      ]
+    }
+  ],
+  "objectTypes": [
+    {
+      "name": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "type": "string"
+        },
+        {
+          "name": "mean_move",
+          "type": "float"
+        },
+        {
+          "name": "mean_duration",
+          "type": "float"
+        },
+        {
+          "name": "mean_breakdown",
+          "type": "float"
+        },
+        {
+          "name": "mean_repair",
+          "type": "float"
+        },
+        {
+          "name": "process_yield",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "name": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "name": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "id": "11",
+      "time": "2025-01-01T00:00:00.000000Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 10
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "12",
+      "time": "2025-01-01T00:00:00.000000Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "13",
+      "time": "2025-01-01T00:00:00.000000Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "29",
+      "time": "2025-01-01T00:00:40.044905Z",
+      "type": "Object-arriving-WT",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 10
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "32",
+      "time": "2025-01-01T00:01:17.880837Z",
+      "type": "Transformation-assembling-WT",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 10,
+              "class": [
+                "Lot0",
+                "lotModel/"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 10
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "36",
+      "time": "2025-01-01T00:01:17.940837Z",
+      "type": "Object-departing-WT",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 10
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "47",
+      "time": "2025-01-01T00:01:17.940837Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 4
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "48",
+      "time": "2025-01-01T00:01:17.940837Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "49",
+      "time": "2025-01-01T00:01:17.940837Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "46",
+      "time": "2025-01-01T00:01:23.940837Z",
+      "type": "Aggregation-DELETE",
+      "relationships": [
+        {
+          "objectId": "Lot0",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        }
+      ]
+    },
+    {
+      "id": "41",
+      "time": "2025-01-01T00:02:04.928627Z",
+      "type": "Object-arriving-WT",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "74",
+      "time": "2025-01-01T00:02:07.136766Z",
+      "type": "Transformation-assembling-WT",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 5,
+              "class": [
+                "Lot1",
+                "lotModel/"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "78",
+      "time": "2025-01-01T00:02:07.196766Z",
+      "type": "Object-departing-WT",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "72",
+      "time": "2025-01-01T00:03:29.019970Z",
+      "type": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "83",
+      "time": "2025-01-01T00:03:52.012149Z",
+      "type": "Object-arriving-WT",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "88",
+      "time": "2025-01-01T00:04:41.748393Z",
+      "type": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 3,
+              "class": [
+                "Lot0_1",
+                "lotModel/WT"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "95",
+      "time": "2025-01-01T00:04:41.808393Z",
+      "type": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "100",
+      "time": "2025-01-01T00:04:57.723342Z",
+      "type": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "109",
+      "time": "2025-01-01T00:05:37.787922Z",
+      "type": "Transformation-assembling-WT",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 5,
+              "class": [
+                "Lot2",
+                "lotModel/WT"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "113",
+      "time": "2025-01-01T00:05:37.847922Z",
+      "type": "Object-departing-WT",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WT1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "70",
+      "time": "2025-01-01T00:06:23.979133Z",
+      "type": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 4
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "142",
+      "time": "2025-01-01T00:14:51.066608Z",
+      "type": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 5,
+              "class": [
+                "Lot1",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "146",
+      "time": "2025-01-01T00:14:51.126608Z",
+      "type": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "156",
+      "time": "2025-01-01T00:14:51.126608Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "157",
+      "time": "2025-01-01T00:14:51.126608Z",
+      "type": "Object-creating_class_instance",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 2
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "object"
+        }
+      ]
+    },
+    {
+      "id": "155",
+      "time": "2025-01-01T00:14:57.126608Z",
+      "type": "Aggregation-DELETE",
+      "relationships": [
+        {
+          "objectId": "Lot1",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "childObject"
+        }
+      ]
+    },
+    {
+      "id": "174",
+      "time": "2025-01-01T00:15:21.228031Z",
+      "type": "Object-arriving-WB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 2
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "173",
+      "time": "2025-01-01T00:15:23.132497Z",
+      "type": "Object-arriving-WB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "176",
+      "time": "2025-01-01T00:16:10.063808Z",
+      "type": "Transformation-assembling-WB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 2,
+              "class": [
+                "Lot1_1",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 2
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "183",
+      "time": "2025-01-01T00:16:10.123808Z",
+      "type": "Object-departing-WB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 2
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "189",
+      "time": "2025-01-01T00:16:16.123808Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot1_1_Pack0",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot1_1",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "179",
+      "time": "2025-01-01T00:16:27.992818Z",
+      "type": "Transformation-assembling-WB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 3,
+              "class": [
+                "Lot1_0",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "192",
+      "time": "2025-01-01T00:16:28.052818Z",
+      "type": "Object-departing-WB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "198",
+      "time": "2025-01-01T00:16:34.052818Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot1_0_Pack0",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 0.375
+        }
+      ]
+    },
+    {
+      "id": "151",
+      "time": "2025-01-01T00:16:51.210500Z",
+      "type": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "200",
+      "time": "2025-01-01T00:17:17.518406Z",
+      "type": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 5,
+              "class": [
+                "Lot2",
+                "lotModel/WT"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "204",
+      "time": "2025-01-01T00:17:17.578406Z",
+      "type": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 5
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB2",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "210",
+      "time": "2025-01-01T00:17:23.578406Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot0_1",
+          "qualifier": "childObject"
+        }
+      ]
+    },
+    {
+      "id": "218",
+      "time": "2025-01-01T00:17:23.711490Z",
+      "type": "Object-arriving-WB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 8
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "220",
+      "time": "2025-01-01T00:18:17.953175Z",
+      "type": "Transformation-assembling-WB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 8,
+              "class": [
+                "Lot2",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 8
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "224",
+      "time": "2025-01-01T00:18:18.013175Z",
+      "type": "Object-departing-WB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 8
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "230",
+      "time": "2025-01-01T00:18:24.013175Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot2_Pack0",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot1_0",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 0.375
+        }
+      ]
+    },
+    {
+      "id": "231",
+      "time": "2025-01-01T00:18:30.013175Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot2_Pack1",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "232",
+      "time": "2025-01-01T00:18:36.013175Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot2_Pack2",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "233",
+      "time": "2025-01-01T00:18:42.013175Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot2_Pack3",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 0.75
+        }
+      ]
+    },
+    {
+      "id": "235",
+      "time": "2025-01-01T00:20:00.590908Z",
+      "type": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 4,
+              "class": [
+                "Lot0_0",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 4
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "239",
+      "time": "2025-01-01T00:20:00.650908Z",
+      "type": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 4
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "244",
+      "time": "2025-01-01T00:23:49.568423Z",
+      "type": "Object-arriving-DB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "265",
+      "time": "2025-01-01T00:31:45.187626Z",
+      "type": "Transformation-assembling-DB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 3,
+              "class": [
+                "Lot0_2",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "269",
+      "time": "2025-01-01T00:31:45.247626Z",
+      "type": "Object-departing-DB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 3
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "DB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "275",
+      "time": "2025-01-01T00:31:51.247626Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot0_0",
+          "qualifier": "childObject"
+        }
+      ]
+    },
+    {
+      "id": "283",
+      "time": "2025-01-01T00:38:26.874890Z",
+      "type": "Object-arriving-WB",
+      "attributes": [
+        {
+          "name": "amount",
+          "value": 7
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "285",
+      "time": "2025-01-01T00:38:42.880247Z",
+      "type": "Transformation-assembling-WB",
+      "attributes": [
+        {
+          "name": "inputQuantity",
+          "value": [
+            {
+              "amount": 7,
+              "class": [
+                "Lot0_2",
+                "lotModel/WT-DB"
+              ]
+            }
+          ]
+        },
+        {
+          "name": "outputQuantity",
+          "value": 7
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "289",
+      "time": "2025-01-01T00:38:42.940247Z",
+      "type": "Object-departing-WB",
+      "attributes": [
+        {
+          "name": "quantity",
+          "value": 7
+        }
+      ],
+      "relationships": [
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "object"
+        },
+        {
+          "objectId": "WB1",
+          "qualifier": "location"
+        }
+      ]
+    },
+    {
+      "id": "295",
+      "time": "2025-01-01T00:38:48.940247Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot0_2_Pack0",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot2",
+          "qualifier": "childObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 0.75
+        }
+      ]
+    },
+    {
+      "id": "296",
+      "time": "2025-01-01T00:38:54.940247Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot0_2_Pack1",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "297",
+      "time": "2025-01-01T00:39:00.940247Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot0_2_Pack2",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    },
+    {
+      "id": "298",
+      "time": "2025-01-01T00:39:06.940247Z",
+      "type": "Aggregation-ADD",
+      "relationships": [
+        {
+          "objectId": "Lot0_2_Pack3",
+          "qualifier": "parentObject"
+        },
+        {
+          "objectId": "Lot0_2",
+          "qualifier": "childObject"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "averageQuality",
+          "value": 1.0
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": "Lot0_0",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'split', 'DB', 'DB', 'DB', 'merge']"
+        }
+      ]
+    },
+    {
+      "id": "Lot0_2_Pack0",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot0_2_Pack3",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "DB2",
+      "type": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "DB"
+        },
+        {
+          "name": "mean_move",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        },
+        {
+          "name": "mean_duration",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 2
+        },
+        {
+          "name": "mean_breakdown",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 5
+        },
+        {
+          "name": "mean_repair",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "process_yield",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        }
+      ]
+    },
+    {
+      "id": "Lot2_Pack0",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot0",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'split']"
+        }
+      ]
+    },
+    {
+      "id": "Lot1_0_Pack0",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot2_Pack3",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "WB2",
+      "type": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "WB"
+        },
+        {
+          "name": "mean_move",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        },
+        {
+          "name": "mean_duration",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 2
+        },
+        {
+          "name": "mean_breakdown",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 5
+        },
+        {
+          "name": "mean_repair",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "process_yield",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "DB1",
+      "type": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "DB"
+        },
+        {
+          "name": "mean_move",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        },
+        {
+          "name": "mean_duration",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 2
+        },
+        {
+          "name": "mean_breakdown",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 5
+        },
+        {
+          "name": "mean_repair",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "process_yield",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "Lot0_2",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'split', 'DB', 'DB', 'DB', 'DB', 'merge', 'WB']"
+        }
+      ]
+    },
+    {
+      "id": "Lot0_2_Pack1",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot1_1",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'DB', 'DB', 'DB', 'split', 'WB']"
+        }
+      ]
+    },
+    {
+      "id": "WB1",
+      "type": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "WB"
+        },
+        {
+          "name": "mean_move",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        },
+        {
+          "name": "mean_duration",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "mean_breakdown",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 5
+        },
+        {
+          "name": "mean_repair",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "process_yield",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "Lot0_1",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'split', 'DB', 'merge']"
+        }
+      ]
+    },
+    {
+      "id": "Lot1_1_Pack0",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot0_2_Pack2",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot2",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'WT', 'DB', 'merge', 'WB']"
+        }
+      ]
+    },
+    {
+      "id": "Lot1",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'DB', 'DB', 'DB', 'split']"
+        }
+      ]
+    },
+    {
+      "id": "WT1",
+      "type": "ProductionResource",
+      "attributes": [
+        {
+          "name": "capability",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "WT"
+        },
+        {
+          "name": "mean_move",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 0.5
+        },
+        {
+          "name": "mean_duration",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "mean_breakdown",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 5
+        },
+        {
+          "name": "mean_repair",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        },
+        {
+          "name": "process_yield",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": 1
+        }
+      ]
+    },
+    {
+      "id": "Lot1_0",
+      "type": "ProductionLot",
+      "attributes": [
+        {
+          "name": "executed_steps",
+          "time": "2025-01-01T00:00:00.000000Z",
+          "value": "['WT', 'DB', 'DB', 'DB', 'split', 'WB']"
+        }
+      ]
+    },
+    {
+      "id": "Lot2_Pack1",
+      "type": "PackingUnit",
+      "attributes": []
+    },
+    {
+      "id": "Lot2_Pack2",
+      "type": "PackingUnit",
+      "attributes": []
+    }
+  ]
+}

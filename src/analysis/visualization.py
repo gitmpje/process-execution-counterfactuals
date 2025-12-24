@@ -1,10 +1,16 @@
 import json
+import os
 
 from networkx import DiGraph, nx_agraph
-from process_execution import ProcessExecution
+from .process_execution import ProcessExecution
+
 
 def apply_node_styles_nx(
-    G: ProcessExecution, type_attr="type", nested_attr="attr", color_map=None, default_color="#d3d3d3"
+    G: ProcessExecution,
+    type_attr="type",
+    nested_attr="attr",
+    color_map=None,
+    default_color="#d3d3d3",
 ):
     """
     Compute style attributes for nodes from a NetworkX graph G and store them
@@ -70,9 +76,8 @@ def apply_node_styles_nx(
 
     return G
 
-def apply_edge_styles_nx(
-    G: ProcessExecution
-):
+
+def apply_edge_styles_nx(G: ProcessExecution):
     for u, v, ed in G.edges(data=True):
         if ed["attr"].get("type", "") in ("DF", "DF_agg"):
             ed["style"] = "solid"
@@ -81,7 +86,11 @@ def apply_edge_styles_nx(
             ed["penwidth"] = "0.5"
 
 
-def visualize_with_svg_and_js(trace_graph: ProcessExecution, normalized_subgraphs: list, out_prefix: str):
+def visualize_with_svg_and_js(
+    trace_graph: ProcessExecution,
+    normalized_subgraphs: list = [],
+    out_prefix: str = "process_execution",
+):
     """Create an interactive HTML using native SVG with Graphviz layout, preserving original agraph styles.
     Includes JavaScript-based toggle buttons to highlight normalized process executions.
 
@@ -89,26 +98,30 @@ def visualize_with_svg_and_js(trace_graph: ProcessExecution, normalized_subgraph
     - normalized_subgraphs: list of networkx subgraphs to be highlighted
     - out_prefix: output file prefix (files placed into `figures/`)
     """
-    
+
     G = trace_graph
-    
+
+    os.makedirs("figures", exist_ok=True)
+
     # Render base graph as SVG using Graphviz
     agraph = nx_agraph.to_agraph(G)
-    svg_str = agraph.draw(format='svg', prog='dot').decode('utf-8')
-    
+    svg_str = agraph.draw(format="svg", prog="dot").decode("utf-8")
+
     # Escape svg_str for embedding in JavaScript string
-    svg_str_escaped = svg_str.replace('`', '\\`').replace('\\', '\\\\')
-    
+    svg_str_escaped = svg_str.replace("`", "\\`").replace("\\", "\\\\")
+
     # Build highlight configs as JSON
     highlight_configs = []
     for subg in normalized_subgraphs:
-        highlight_configs.append({
-            'nodes': list(subg.nodes()),
-            'edges': [(str(u), str(v)) for u, v in subg.edges()]
-        })
-    
+        highlight_configs.append(
+            {
+                "nodes": list(subg.nodes()),
+                "edges": [(str(u), str(v)) for u, v in subg.edges()],
+            }
+        )
+
     highlight_configs_json = json.dumps(highlight_configs)
-    
+
     # Create HTML with embedded SVG + JavaScript toggle logic
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -273,16 +286,18 @@ def visualize_with_svg_and_js(trace_graph: ProcessExecution, normalized_subgraph
 </body>
 </html>
 """
-    
+
     # Write HTML file
     html_path = f"figures/{out_prefix}_interactive.html"
-    with open(html_path, 'w') as f:
+    with open(html_path, "w") as f:
         f.write(html_content)
-    
+
     return html_path
 
 
-def visualize_highlight_normalized(trace_graph: ProcessExecution, normalized_subgraphs: list, out_prefix: str):
+def visualize_highlight_normalized(
+    trace_graph: ProcessExecution, normalized_subgraphs: list, out_prefix: str
+):
     # Additionally, produce small highlighted SVGs for each normalized subgraph (optional)
     out_paths = []
     for idx, subg in enumerate(normalized_subgraphs):
