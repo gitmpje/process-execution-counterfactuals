@@ -1,13 +1,13 @@
 import logging
-from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 import multiprocessing as mp
 
 from copy import deepcopy
 from functools import partial
 from itertools import combinations, product
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from math import comb, prod
 from numpy import inf
-from typing import Any, Dict, Iterable, List, Tuple
-
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .process_execution import ProcessExecution
 
@@ -45,7 +45,10 @@ class NodeAttributeNumeric(Feature):
         self.value_range = value_range
 
     def __repr__(self) -> str:
-        return f"{self.node_id} - {self.attribute_name} {self.value_range}"
+        return f"{self.node_id} - {self.attribute_name} {self.value_range} (action space size {self.action_space_size()})"
+
+    def action_space_size(self):
+        return len(self.value_range)
 
     def action_space(
         self, current_change: int | float | complex
@@ -74,47 +77,58 @@ class NodeAttributeNumeric(Feature):
         return p
 
 
-class ObjectSubstitutions(Feature):
+class ObjectNodeSubstitution(Feature):
     """
     Feature representing possible object node substitutions in a process execution.
     Attributes:
-        substitution_options (Optional[List[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]]):
+        substitution_options (Optional[List[List[Tuple[str, Tuple[str, dict]]]]]):
             An iterable of lists of substitution options, where each substitution option is a tuple
             containing the original node (ID and attributes) and the substitute node (ID and attributes).
-        allowed_substitutions (Optional[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]):
+        allowed_substitutions (Optional[Dict[str, List[Tuple[str, dict]]]]):
             A list of allowed substitutions for the object nodes.
     """
 
     def __init__(
         self,
         *args,
-        substitution_options: List[
-            List[Tuple[Tuple[str, dict], Tuple[str, dict]]]
+        substitution_options: Optional[
+            List[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]
         ] = None,
-        allowed_substitutions: List[Tuple[Tuple[str, dict], Tuple[str, dict]]] = None,
+        allowed_substitutions: Optional[Dict[str, List[Tuple[str, dict]]]] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.substitution_options = substitution_options
+        self.substitution_options = substitution_options if substitution_options else []
         self.allowed_substitutions = (
-            allowed_substitutions if allowed_substitutions else []
+            allowed_substitutions if allowed_substitutions else {}
         )
 
     def __repr__(self) -> str:
         if self.substitution_options:
-            return f"{len(self.substitution_options)} substitution options"
+            return f"{len(self.substitution_options)} substitution options (action space size {self.action_space_size()})"
         else:
-            return f"{len(self.allowed_substitutions)} allowed substitutions"
+            return f"{len(self.allowed_substitutions)} nodes with substitutions (action space size {self.action_space_size()})"
 
-    def action_space(
-        self, current_change
-    ) -> Iterable[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]:
+    def action_space_size(self):
+        if self.substitution_options:
+            return len(self.substitution_options)
+        else:
+            sizes = [len(x) for x in self.allowed_substitutions.values()]
+
+        n = len(sizes)
+        total = 0
+        for r in range(n + 1):
+            for combo_indices in combinations(range(n), r):
+                total += prod(sizes[i] for i in combo_indices) if combo_indices else 1
+        return total
+
+    def action_space(self, current_change) -> Iterable[Tuple[str, Tuple[str, dict]]]:
         """
         Generate possible substitution options for the object node feature.
         Args:
             current_change: The current substitution option.
         Yields:
-            Iterable[List[Tuple[Tuple[str, dict], Tuple[str, dict]]]]: Possible substitution options.
+            Iterable[Tuple[str, Tuple[str, dict]]]: Possible substitution options.
         """
 
         if self.substitution_options:
@@ -122,23 +136,37 @@ class ObjectSubstitutions(Feature):
                 if len(option) >= len(current_change):
                     yield option
         else:
-            for r in range(len(self.allowed_substitutions) + 1):
-                for c in combinations(self.allowed_substitutions, r):
-                    for p in product(*c):
+            if not current_change:
+                yield []  # no object no substitutions
+            for r in range(1, len(self.allowed_substitutions) + 1):
+                for c in combinations(self.allowed_substitutions.keys(), r):
+                    substitution_combinations = [
+                        [
+                            (i, subst_node)
+                            for subst_node in self.allowed_substitutions[i]
+                        ]
+                        for i in c
+                    ]
+                    for p in product(*substitution_combinations):
                         if len(p) >= len(current_change):
                             yield p
 
     def apply_change(
         self,
         p: ProcessExecution,
-        substitutions: List[Tuple[Tuple[str, dict], Tuple[str, dict]]],
+        substitutions: List[Tuple[str, Tuple[str, dict]]],
     ) -> ProcessExecution:
         for substitution in substitutions:
             if not substitution:
                 return p
+            node_id = substitution[0]
+
+            # Empty substitute
+            if not substitution[1]:
+                p.remove_node(node_id)
+                return p
 
             # Construct edges to substitution node
-            node_id = substitution[0][0]
             subst_node_id = substitution[1][0]
             subst_node_attr = substitution[1][1]
             edges = []
@@ -152,6 +180,92 @@ class ObjectSubstitutions(Feature):
 
             # Add node with attributes and edges
             p.add_node(subst_node_id, **subst_node_attr)
+            p.add_edges_from(edges)
+
+        return p
+
+
+class EventNodeDeletion(Feature):
+    """
+    Feature representing possible event node deletions from a process execution.
+    Attributes:
+        deletion_options (Optional[Iterable[List[str]]]):
+            An iterable of deletion options, where each deletion option is a list of nodes identifiers.
+        allowed_deletions (Optional[List[str]]):
+            A list of node identifiers that can be deleted.
+    """
+
+    def __init__(
+        self,
+        *args,
+        deletion_options: Iterable[List[str]] = None,
+        allowed_deletions: List[str] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.deletion_options = deletion_options = (
+            deletion_options if deletion_options else []
+        )
+        self.allowed_deletions = allowed_deletions if allowed_deletions else []
+
+    def __repr__(self) -> str:
+        if self.deletion_options:
+            return f"{len(self.deletion_options)} deletion options (action space size {self.action_space_size()})"
+        else:
+            return f"{len(self.allowed_deletions)} allowed deletions (action space size {self.action_space_size()})"
+
+    def action_space_size(self):
+        if self.deletion_options:
+            return len(self.deletion_options)
+        else:
+            size = 0
+            for r in range(len(self.allowed_deletions) + 1):
+                size += comb(len(self.allowed_deletions), r)
+            return size
+
+    def action_space(self, current_change) -> Iterable[List[str]]:
+        """
+        Generate possible deletion options for the object node feature.
+        Args:
+            current_change: The current deletion option.
+        Yields:
+            Iterable[List[str]]: Possible deletion options.
+        """
+
+        if self.deletion_options:
+            for option in self.deletion_options:
+                if len(option) >= len(current_change):
+                    yield option
+        else:
+            for r in range(len(self.allowed_deletions) + 1):
+                for c in combinations(self.allowed_deletions, r):
+                    if len(c) >= len(current_change):
+                        yield c
+
+    def apply_change(
+        self,
+        p: ProcessExecution,
+        deletions: List[str],
+    ) -> ProcessExecution:
+        for deletion_node_id in deletions:
+            # Add DF edges to 'skip' deletion node
+            edges = []
+            target_df_events = [
+                v
+                for u, v, d in p.out_edges(deletion_node_id, data=True)
+                if d["attr"]["type"] == "DF"
+            ]
+            for u, v, d in p.in_edges(deletion_node_id, data=True):
+                if d["attr"]["type"] != "DF":
+                    continue
+                edges.extend(
+                    [(u, target_event, d) for target_event in target_df_events]
+                )
+
+            # Remove node
+            p.remove_node(deletion_node_id)
+
+            # Add edges
             p.add_edges_from(edges)
 
         return p
@@ -171,26 +285,23 @@ class Action:
 
     def __init__(
         self,
-        event_deletion: List[str] = None,
+        event_deletion: Dict[EventNodeDeletion, List[str]] = None,
         event_insertion: List[str] = None,
         object_substitution: Dict[
-            ObjectSubstitutions, List[Tuple[Tuple[str, dict], Tuple[str, dict]]]
+            ObjectNodeSubstitution, List[Tuple[Tuple[str, dict], Tuple[str, dict]]]
         ] = None,
-        relation_deletion: List[Tuple[str, str]] = None,
-        relation_insertion: List[Tuple[str, str]] = None,
         node_attributes_modification: Dict[NodeAttributeNumeric, Any] = None,
     ):
-        self.event_deletion = event_deletion if event_deletion else []
+        self.event_deletion = event_deletion if event_deletion else {}
         self.event_insertion = event_insertion if event_insertion else []
         self.object_substitution = object_substitution if object_substitution else {}
-        self.relation_deletion = relation_deletion if relation_deletion else []
-        self.relation_insertion = relation_insertion if relation_insertion else []
         self.node_attributes_modification = (
             node_attributes_modification if node_attributes_modification else {}
         )
 
     def __repr__(self):
         return f"""Action<{id(self)}>
+    event_deletion: {self.event_deletion}
     object_substitution: {self.object_substitution}
     node_attributes_modification: {self.node_attributes_modification}"""
 
@@ -202,10 +313,14 @@ class Action:
         Returns:
             Any: The current change value for the feature.
         """
-        if isinstance(feature, NodeAttributeNumeric):
+        if isinstance(feature, EventNodeDeletion):
+            return self.event_deletion.get(feature, [])
+        elif isinstance(feature, NodeAttributeNumeric):
             return self.node_attributes_modification.get(feature, 0)
-        if isinstance(feature, ObjectSubstitutions):
+        elif isinstance(feature, ObjectNodeSubstitution):
             return self.object_substitution.get(feature, [])
+        else:
+            NotImplementedError(f"Feature of type {type(feature)} is not supported")
 
     def set_change_value(self, feature: Feature, value: Any):
         """
@@ -214,9 +329,11 @@ class Action:
             feature (Feature): The feature for which to set the change value.
             value (Any): The new value to set for the feature.
         """
-        if isinstance(feature, NodeAttributeNumeric):
+        if isinstance(feature, EventNodeDeletion):
+            self.event_deletion[feature] = value
+        elif isinstance(feature, NodeAttributeNumeric):
             self.node_attributes_modification[feature] = value
-        if isinstance(feature, ObjectSubstitutions):
+        elif isinstance(feature, ObjectNodeSubstitution):
             self.object_substitution[feature] = value
         else:
             NotImplementedError(f"Feature of type {type(feature)} is not supported")
@@ -318,6 +435,20 @@ class BranchAndBoundCounterFactual:
         except IndexError:
             return None
 
+    def maximum_number_of_actions(
+        self,
+        available_features: List[Feature],
+    ) -> int:
+        """
+        Calculate maximum number of actions.
+        """
+        n_actions = 1
+        for feature in available_features:
+            n_actions *= feature.action_space_size()
+
+        # TODO: incorporate limit on max_changes
+        return n_actions
+
     def find_counterfactuals(
         self,
         process_execution: ProcessExecution,
@@ -404,6 +535,10 @@ class BranchAndBoundCounterFactual:
             Action: Generated actions to be evaluated.
         """
 
+        # Prune actions that exceed max changes
+        if action.action_size() + 1 > self.max_changes:
+            return
+
         # Select the next feature to explore
         selected_feature = self.select_feature(available_features)
         if not selected_feature:
@@ -415,18 +550,14 @@ class BranchAndBoundCounterFactual:
         ):
             action_prime = deepcopy(action)
 
-            # Prune actions that exceed max changes
-            if action_prime.action_size() > self.max_changes:
-                return
-
             # Set the new change value for the selected feature
             action_prime.set_change_value(selected_feature, value)
 
+            yield action_prime
             yield from self._branch_and_bound_task(
                 action_prime,
-                deepcopy(available_features),
+                available_features.copy(),
             )
-            yield action_prime
 
     def _branch_and_bound_worker(
         self,

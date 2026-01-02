@@ -4,14 +4,13 @@ import os
 import pm4py
 
 from collections import Counter
-from copy import deepcopy
 from networkx import Graph
 from numpy import arange
 
 from analysis.branch_and_bound import (
     BranchAndBoundCounterFactual,
     NodeAttributeNumeric,
-    ObjectSubstitutions,
+    ObjectNodeSubstitution,
 )
 from analysis.process_execution import extract_process_execution, ProcessExecution
 from analysis.utils import build_ocel_dfg
@@ -91,15 +90,15 @@ target_process_execution = trace_graphs[target_process_execution_id][
     "process_execution"
 ]
 
-# Feature for each object node substitution
-allowed_substitutions = []
+# One feature for all object node substitution options
+allowed_substitutions = {}
 object_substitutions = []
 for node_id, data in target_process_execution.nodes(data=True):
     if data["attr"].get("type", "") != "OBJECT":
         continue
 
-    substitutions = [
-        ((node_id, data), (subst_id, subst_data))
+    allowed_substitutions[node_id] = [()] + [
+        (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
         if subst_id != node_id
         and subst_data["attr"].get("ocel:type", "") == data["attr"].get("ocel:type", "")
@@ -107,13 +106,9 @@ for node_id, data in target_process_execution.nodes(data=True):
         == data["attr"].get("capability", "")
     ]
 
-    allowed_substitutions.append(substitutions)
-
-object_substitutions = [
-    ObjectSubstitutions(
-        allowed_substitutions=allowed_substitutions,
-    )
-]
+object_substitution_feature = ObjectNodeSubstitution(
+    allowed_substitutions=allowed_substitutions,
+)
 
 # Features for event node attributes
 event_node_attributes = [
@@ -128,10 +123,6 @@ event_node_attributes = [
     if attr_name in selected_event_attributes
 ]
 
-print(
-    f"object_substitutions: {len(object_substitutions)}\nevent_node_attributes: {len(event_node_attributes)}"
-)
-
 branch_and_bound = BranchAndBoundCounterFactual(
     process_outcome=process_outcome,
     max_changes=max_changes,
@@ -140,7 +131,15 @@ branch_and_bound = BranchAndBoundCounterFactual(
 )
 
 # %% Run branch and bound algorithm to find counter factuals
-available_features = deepcopy(object_substitutions) + deepcopy(event_node_attributes)
+available_features = [object_substitution_feature] + event_node_attributes
+for feature in available_features:
+    print(feature)
+
+print(
+    "Maximum number of actions to evaluate: ",
+    branch_and_bound.maximum_number_of_actions(available_features),
+)
+
 selected_actions = branch_and_bound.find_counterfactuals(
     target_process_execution,
     available_features,
@@ -158,7 +157,7 @@ for selected_action in selected_actions:
             if change_value != 0
         ],
         [
-            (subst[0][0], subst[1][0])
+            (subst[0], subst[1][0] if subst[1] else "")
             for v in selected_action.object_substitution.values()
             for subst in v
             if subst

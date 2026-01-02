@@ -7,9 +7,16 @@ from typing import List, Tuple
 
 
 def build_ocel_dfg(
-    ocel: OCEL, selected_aggregation_activity_qualifier: List[Tuple[str, str]]
+    ocel: OCEL, selected_aggregation_activity_qualifier: List[Tuple[str, str]] = []
 ) -> MultiDiGraph:
-    """Build a Directly-Follows Graph (DFG) from an OCEL, including aggregation edges."""
+    """Build a Directly-Follows Graph (DFG) from an OCEL, including aggregation edges.
+    Args:
+        ocel (OCEL): The OCEL object.
+        selected_aggregation_activity_qualifier (List[Tuple[str, str]], optional): 
+            List of (activity, qualifier) pairs for which to add aggregation DF edges. 
+            Defaults to [].
+    Returns:
+        MultiDiGraph: The constructed OCEL DFG with aggregation edges."""
 
     _ocel_nx = convert_ocel_to_networkx(ocel)
 
