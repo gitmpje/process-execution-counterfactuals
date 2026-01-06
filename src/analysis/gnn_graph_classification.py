@@ -6,10 +6,12 @@ import networkx as nx
 import torch
 
 from sklearn.model_selection import train_test_split
+from torch.utils.data import Subset
 from torch_geometric.data import Data
+from torch_geometric.explain import Explainer, GNNExplainer
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def build_vocab_and_numeric_keys(
@@ -246,17 +248,7 @@ def evaluate_acc(model, loader, device) -> Tuple[float, float, List[int], List[i
     return acc, f1, ys, ps
 
 
-def train_gnn_graph_classification(
-    graphs: Dict[str, nx.Graph], model_path: str = None, model_weights_path: str = None
-):
-    """
-    Train a GNN for graph classification on process execution graphs.
-    Args:
-        graphs (Dict[str, nx.Graph]): Dictionary of process execution graphs.
-        model_path (str): Path to save the full model.
-        model_weights_path (str): Path to save the model weights.
-    """
-
+def build_dataset_from_graph_dict(graphs: Dict[str, nx.Graph]) -> List[Data]:
     # Build dataset
     node_label_vocab, node_num_keys, edge_num_keys = build_vocab_and_numeric_keys(
         graphs
@@ -271,6 +263,22 @@ def train_gnn_graph_classification(
     if len(data_list) == 0:
         raise RuntimeError("No graphs found in graphs")
 
+    return data_list
+
+
+def train_gnn_graph_classification(
+    graphs: Dict[str, nx.Graph], model_path: str = None, model_weights_path: str = None
+):
+    """
+    Train a GNN for graph classification on process execution graphs.
+    Args:
+        graphs (Dict[str, nx.Graph]): Dictionary of process execution graphs.
+        model_path (str): Path to save the full model.
+        model_weights_path (str): Path to save the model weights.
+    """
+
+    data_list = build_dataset_from_graph_dict(graphs)
+
     labels = [int(d.y.item()) for d in data_list]
     train_idx, test_idx = train_test_split(
         list(range(len(data_list))),
@@ -279,8 +287,6 @@ def train_gnn_graph_classification(
         stratify=labels if len(set(labels)) > 1 else None,
     )
     train_idx, val_idx = train_test_split(train_idx, test_size=0.1, random_state=42)
-
-    from torch.utils.data import Subset
 
     train_ds = Subset(data_list, train_idx)
     val_ds = Subset(data_list, val_idx)
@@ -311,3 +317,63 @@ def train_gnn_graph_classification(
         torch.save(model, model_path)
     if model_weights_path:
         torch.save(model.state_dict(), model_weights_path)
+
+
+def explain_gnn_graph_classification(
+    graph: nx.Graph,
+    node_label_vocab: List[str],
+    node_num_keys: List[str],
+    edge_num_keys: List[str],
+    output_path_feature_importance: Optional[str],
+    output_path_subgraph: Optional[str],
+):
+    feat_labels = node_label_vocab + node_num_keys
+
+    graphs = {"tmp": {"process_execution": graph}}
+    data_list = convert_trace_graphs_to_pyg(
+        graphs,
+        node_label_vocab,
+        node_num_keys,
+        edge_num_keys,
+    )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    data = data_list[0]
+    in_ch = data.x.shape[1]
+    model = GCNWithEdgeAgg(in_ch).to(device)
+
+    batch_vec = torch.zeros(data.x.size(0), dtype=torch.long, device=device)
+    data = data.to(device)
+
+    model.eval()
+    explainer = Explainer(
+        model=model,
+        algorithm=GNNExplainer(epochs=200),
+        explanation_type="model",
+        node_mask_type="attributes",
+        edge_mask_type="object",
+        model_config=dict(
+            mode="regression",
+            task_level="graph",
+            return_type="raw",
+        ),
+    )
+    explanation = explainer(data.x, data.edge_index, batch=batch_vec)
+
+    if output_path_feature_importance:
+        explanation.visualize_feature_importance(
+            output_path_feature_importance,
+            feat_labels=feat_labels,
+            top_k=10,
+        )
+
+    if output_path_subgraph:
+        explanation.visualize_graph(
+            output_path_subgraph, node_labels=[v for n, v in graph.nodes(data="label")]
+        )
+
+    return explainer, bool(
+        explainer.get_prediction(data.x, data.edge_index, batch=batch_vec)
+        .argmax()
+        .item()
+    )
