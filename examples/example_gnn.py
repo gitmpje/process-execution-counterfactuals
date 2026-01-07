@@ -1,6 +1,7 @@
 # %% Import dependencies
 import json
 import gzip
+import networkx as nx
 import os
 import pm4py
 import torch
@@ -9,17 +10,23 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from analysis.branch_and_bound import (
-    BranchAndBoundCounterFactual,
+from analysis.branch_and_bound.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
+from analysis.branch_and_bound.branch_and_bound import BranchAndBoundCounterFactual
 from analysis.process_execution import extract_process_execution, ProcessExecution
 from analysis.utils import load_graphml_with_json_attrs
 from analysis.gnn_graph_classification import (
     convert_trace_graphs_to_pyg,
+    explain_gnn_graph_classification,
     GCNWithEdgeAgg,
 )
+from analysis.visualization import (
+    apply_node_styles_nx,
+    apply_edge_styles_nx,
+)
+
 
 dirname = os.path.dirname(__file__)
 
@@ -182,24 +189,34 @@ target_process_execution = trace_graphs[target_process_execution_id][
     "process_execution"
 ]
 
-# One feature for all object node substitution options
-allowed_substitutions = {}
+# Object substitution features
+object_substitution_features = []
 for node_id, data in target_process_execution.nodes(data=True):
     if data["attr"].get("type", "") != "OBJECT":
         continue
 
-    allowed_substitutions[node_id] = [
+    # Only allow substitution of production resources
+    if data["attr"].get("ocel:type", "") != "ProductionResource":
+        continue
+
+    substitution_objects = [
         (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_id != node_id
-        and subst_data["attr"].get("ocel:type", "") == data["attr"].get("ocel:type", "")
+        if subst_data["attr"].get("ocel:type", "") == data["attr"].get("ocel:type", "")
         and subst_data["attr"].get("capability", "")
         == data["attr"].get("capability", "")
     ]
 
-object_substitution_feature = ObjectNodeSubstitution(
-    allowed_substitutions=allowed_substitutions,
-)
+    object_substitution_features.extend(
+        [
+            ObjectNodeSubstitution(
+                event_id=event_id,
+                object_id=node_id,
+                substitution_objects=substitution_objects,
+            )
+            for event_id, _ in target_process_execution.in_edges(node_id)
+        ]
+    )
 
 # Features for event node attributes
 event_node_attributes = [
@@ -223,7 +240,7 @@ branch_and_bound = BranchAndBoundCounterFactual(
 
 
 # %% Run branch and bound algorithm to find counter factuals
-available_features = [object_substitution_feature] + event_node_attributes
+available_features = object_substitution_features + event_node_attributes
 for feature in available_features:
     print(feature)
 
@@ -244,17 +261,14 @@ for selected_action in selected_actions:
             if change_value != 0
         ],
         [
-            (subst[0], subst[1][0])
-            for v in selected_action.object_substitution.values()
-            for subst in v
-            if subst
+            (feature.event_id, feature.object_id, subst[0])
+            for feature, subst in selected_action.object_substitution.items()
+            if subst and feature.object_id != subst[0]
         ],
     )
 
 
 # %% Explain graph classification for target process execution
-from analysis.gnn_graph_classification import explain_gnn_graph_classification
-
 explainer, prediction = explain_gnn_graph_classification(
     target_process_execution,
     node_labels,
@@ -265,12 +279,6 @@ explainer, prediction = explain_gnn_graph_classification(
 )
 
 # %% Visualize target process execution
-import networkx as nx
-from analysis.visualization import (
-    apply_node_styles_nx,
-    apply_edge_styles_nx,
-)
-
 apply_node_styles_nx(target_process_execution)  # apply coloring + tooltip
 apply_edge_styles_nx(target_process_execution)  # apply coloring + tooltip
 
