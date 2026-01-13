@@ -34,10 +34,8 @@ def build_vocab_and_numeric_keys(
     node_labels = set()
     node_numeric_keys = set()
     edge_numeric_keys = set()
-    for k, v in trace_graphs.items():
-        G = v.get("process_execution")
-        if G is None:
-            continue
+    for trace_graph in trace_graphs.values():
+        G = trace_graph["process_execution"]
         for _, d in G.nodes(data=True):
             lab = d.get("label") or d.get("node_label") or d.get("nlabel")
             if lab is not None:
@@ -45,15 +43,15 @@ def build_vocab_and_numeric_keys(
             # check attr dict for numeric keys
             attr = d.get("attr") or {}
             if isinstance(attr, dict):
-                for kk, vv in attr.items():
-                    if isinstance(vv, (int, float)):
-                        node_numeric_keys.add(kk)
+                for k, v in attr.items():
+                    if isinstance(v, (int, float)):
+                        node_numeric_keys.add(k)
         for _, _, ed in G.edges(data=True):
             eattr = ed.get("attr") or {}
             if isinstance(eattr, dict):
-                for kk, vv in eattr.items():
-                    if isinstance(vv, (int, float)):
-                        edge_numeric_keys.add(kk)
+                for k, v in eattr.items():
+                    if isinstance(v, (int, float)):
+                        edge_numeric_keys.add(k)
 
         if output_path:
             with open(output_path, "w") as f:
@@ -85,11 +83,11 @@ def convert_trace_graphs_to_pyg(
         List[Data]: List of PyTorch Geometric Data objects.
     """
 
-    label_to_idx = {l: i for i, l in enumerate(node_label_vocab)}
+    label_to_idx = {label: i for i, label in enumerate(node_label_vocab)}
 
     data_list = []
-    for gid, v in trace_graphs.items():
-        G = v["process_execution"]
+    for trace_graph in trace_graphs.values():
+        G = trace_graph["process_execution"]
         # node features: one-hot label + numeric attrs
         node_list = list(G.nodes())
         node_feat = []
@@ -104,8 +102,8 @@ def convert_trace_graphs_to_pyg(
             # numeric attrs
             nums = []
             attr = d.get("attr") or {}
-            for kk in node_num_keys:
-                nums.append(float(attr.get(kk, 0.0)))
+            for k in node_num_keys:
+                nums.append(float(attr.get(k, 0.0)))
             vec = (
                 np.concatenate([onehot, np.array(nums, dtype=np.float32)])
                 if len(nums) > 0
@@ -122,9 +120,9 @@ def convert_trace_graphs_to_pyg(
         edge_index_src = []
         edge_index_dst = []
         edge_attr_list = []
-        for u, w, ed in G.edges(data=True):
+        for u, v, ed in G.edges(data=True):
             edge_index_src.append(node_list.index(u))
-            edge_index_dst.append(node_list.index(w))
+            edge_index_dst.append(node_list.index(v))
             eattr = ed.get("attr") or {}
             vals = [float(eattr.get(k, 0.0)) for k in edge_num_keys]
             edge_attr_list.append(vals)
@@ -158,7 +156,7 @@ def convert_trace_graphs_to_pyg(
                 x = torch.cat([x, agg], dim=1)
 
         data = Data(x=x, edge_index=edge_index)
-        data.y = torch.tensor([1 if v.get("class") else 0], dtype=torch.long)
+        data.y = torch.tensor([1 if trace_graph.get("class") else 0], dtype=torch.long)
         data_list.append(data)
     return data_list
 

@@ -11,7 +11,7 @@ from analysis.branch_and_bound.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from analysis.branch_and_bound.branch_and_bound import BranchAndBoundCounterFactual
+from analysis.branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
 
 from analysis.process_execution import extract_process_execution, ProcessExecution
 from analysis.utils import build_ocel_dfg
@@ -158,14 +158,10 @@ event_node_attributes = [
     if attr_name in selected_event_attributes
 ]
 
-from logging import DEBUG
-
 branch_and_bound = BranchAndBoundCounterFactual(
     process_outcome=process_outcome,
     max_changes=max_changes,
     counterfactual_label=counter_factual_label,
-    num_workers=num_workers,
-    # log_level=DEBUG
 )
 
 # %% Run branch and bound algorithm to find counter factuals
@@ -181,9 +177,10 @@ print(
 )
 
 selected_actions = []
-selected_actions = branch_and_bound.find_counterfactuals(
-    target_process_execution,
+selected_actions = branch_and_bound.enumerate(
+    Action(),
     available_features,
+    target_process_execution,
 )
 
 # %% Display results

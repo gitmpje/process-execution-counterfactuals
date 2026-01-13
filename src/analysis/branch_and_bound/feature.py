@@ -219,7 +219,7 @@ class EventNodeDeletion(Feature):
                 for u, v, d in p.out_edges(deletion_node_id, data=True)
                 if d["attr"]["type"] == "DF"
             ]
-            for u, v, d in p.in_edges(deletion_node_id, data=True):
+            for u, _, d in p.in_edges(deletion_node_id, data=True):
                 if d["attr"]["type"] != "DF":
                     continue
                 edges.extend(

@@ -14,14 +14,16 @@ from analysis.branch_and_bound.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from analysis.branch_and_bound.branch_and_bound import BranchAndBoundCounterFactual
+from analysis.branch_and_bound.branch_and_bound import (
+    Action,
+    BranchAndBoundCounterFactual,
+)
+from analysis.branch_and_bound.branch_and_bound_parallel import (
+    BranchAndBoundCounterFactualParallel,
+)
 from analysis.process_execution import extract_process_execution, ProcessExecution
 from analysis.utils import load_graphml_with_json_attrs
-from analysis.gnn_graph_classification import (
-    convert_trace_graphs_to_pyg,
-    explain_gnn_graph_classification,
-    GCNWithEdgeAgg,
-)
+from analysis.gnn_han_graph_classification import convert_trace_graphs_to_hetero_pyg
 from analysis.visualization import (
     apply_node_styles_nx,
     apply_edge_styles_nx,
@@ -33,7 +35,7 @@ dirname = os.path.dirname(__file__)
 path_ocel = os.path.join(dirname, "data/example_gnn.json.gz")
 path_graphml = os.path.join(dirname, "data/example_gnn.graphml.gz")
 
-path_model = os.path.join(dirname, "data/example_gnn.pth")
+path_model = os.path.join(dirname, "data/example_gnn_han.pth")
 path_vocab = os.path.join(dirname, "data/example_gnn-vocab.json")
 
 tmp_dir = os.path.join(dirname, "tmp")
@@ -113,7 +115,8 @@ with open(path_vocab) as f:
     vocab_dict = json.load(f)
 node_labels = vocab_dict["node_labels"]
 node_numeric_keys = vocab_dict["node_numeric_keys"]
-edge_numeric_keys = vocab_dict["edge_numeric_keys"]
+
+node_types = ["EVENT", "PackingUnit", "ProductionLot", "ProductionResource"]
 
 # Load trained model
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -134,8 +137,8 @@ def process_outcome(p: ProcessExecution):
     # Convert the single ProcessExecution into the converter's expected input
     try:
         graph_map = {"_tmp": {"process_execution": p}}
-        data_list = convert_trace_graphs_to_pyg(
-            graph_map, node_labels, node_numeric_keys, edge_numeric_keys
+        data_list = convert_trace_graphs_to_hetero_pyg(
+            graph_map, node_types, node_numeric_keys
         )
         if not data_list:
             raise RuntimeError("converter returned empty list")
@@ -144,21 +147,11 @@ def process_outcome(p: ProcessExecution):
         print("process_outcome: conversion to PyG data failed:", e)
         raise
 
-    # Prepare tensors and batch vector for a single-graph forward pass
-    try:
-        # create a batch vector of zeros (single graph)
-        batch_vec = torch.zeros(data.x.size(0), dtype=torch.long, device=device)
-        data = data.to(device)
-    except Exception as e:
-        print("process_outcome: torch/device preparation failed:", e)
-        raise
-
+    data = data.to(device)
     # Forward through the model
     try:
-        model.eval()
         with torch.no_grad():
-            out = model(data.x, data.edge_index, batch_vec)
-            # probs = torch.nn.functional.softmax(out, dim=-1)
+            out = model(data.x_dict, data.edge_index_dict)
 
             # Expecting graph-level logits shaped (1, n_classes)
             if out.dim() == 2 and out.size(0) == 1:
@@ -183,7 +176,6 @@ selected_event_attributes = {
 }
 max_changes = 10
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
-num_workers = 10
 
 target_process_execution = trace_graphs[target_process_execution_id][
     "process_execution"
@@ -231,29 +223,43 @@ event_node_attributes = [
     if attr_name in selected_event_attributes
 ]
 
+
+available_features = event_node_attributes  # + object_substitution_features
+for feature in available_features:
+    print(feature)
+
+# %% Run branch and bound algorithm to find counter factuals
 branch_and_bound = BranchAndBoundCounterFactual(
     process_outcome=process_outcome,
     max_changes=max_changes,
     counterfactual_label=counter_factual_label,
-    num_workers=num_workers,
 )
 
-
-# %% Run branch and bound algorithm to find counter factuals
-available_features = object_substitution_features + event_node_attributes
-for feature in available_features:
-    print(feature)
-
-selected_actions = branch_and_bound.find_counterfactuals(
-    target_process_execution,
+branch_and_bound.enumerate(
+    Action(),
     available_features,
+    target_process_execution,
+)
+selected_actions = branch_and_bound.selected_actions
+
+
+# %% Run branch and bound algorithm in parallel
+branch_and_bound_parallel = BranchAndBoundCounterFactualParallel(
+    process_outcome=process_outcome,
+    max_changes=max_changes,
+    counterfactual_label=counter_factual_label,
+    num_workers=5,
+)
+
+selected_actions = branch_and_bound_parallel.find_counterfactuals(
+    available_features,
+    target_process_execution,
 )
 
 # %% Display results
-print("Number of selected actions:", end=" ")
-print(len(selected_actions))
-
+print("Number of selected actions: ", len(selected_actions))
 for selected_action in selected_actions:
+    print("Objective value:", selected_action.objective_value())
     print(
         [
             f"{feature}: {change_value}"
@@ -266,17 +272,6 @@ for selected_action in selected_actions:
             if subst and feature.object_id != subst[0]
         ],
     )
-
-
-# %% Explain graph classification for target process execution
-explainer, prediction = explain_gnn_graph_classification(
-    target_process_execution,
-    node_labels,
-    node_numeric_keys,
-    edge_numeric_keys,
-    output_path_feature_importance="figures/feature_importance.png",
-    output_path_subgraph="figures/important_subgraph.png",
-)
 
 # %% Visualize target process execution
 apply_node_styles_nx(target_process_execution)  # apply coloring + tooltip
