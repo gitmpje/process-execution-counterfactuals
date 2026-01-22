@@ -10,21 +10,21 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from analysis.branch_and_bound.feature import (
+from branch_and_bound.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from analysis.branch_and_bound.branch_and_bound import (
+from branch_and_bound.branch_and_bound import (
     Action,
     BranchAndBoundCounterFactual,
 )
-from analysis.branch_and_bound.branch_and_bound_parallel import (
+from branch_and_bound.branch_and_bound_parallel import (
     BranchAndBoundCounterFactualParallel,
 )
-from analysis.process_execution import extract_process_execution, ProcessExecution
-from analysis.utils import load_graphml_with_json_attrs
-from analysis.gnn_han_graph_classification import convert_trace_graphs_to_hetero_pyg
-from analysis.visualization import (
+from process_execution.process_execution import extract_process_execution, ProcessExecution
+from process_execution.utils import load_graphml_with_json_attrs
+from gnn.gcn_graph_classification import convert_trace_graphs_to_pyg
+from process_execution.visualization import (
     apply_node_styles_nx,
     apply_edge_styles_nx,
 )
@@ -137,8 +137,8 @@ def process_outcome(p: ProcessExecution):
     # Convert the single ProcessExecution into the converter's expected input
     try:
         graph_map = {"_tmp": {"process_execution": p}}
-        data_list = convert_trace_graphs_to_hetero_pyg(
-            graph_map, node_types, node_numeric_keys
+        data_list = convert_trace_graphs_to_pyg(
+            graph_map, node_types, node_numeric_keys, []
         )
         if not data_list:
             raise RuntimeError("converter returned empty list")
@@ -278,5 +278,5 @@ apply_node_styles_nx(target_process_execution)  # apply coloring + tooltip
 apply_edge_styles_nx(target_process_execution)  # apply coloring + tooltip
 
 # Draw base process execution graph
-agraph = nx.nx_agraph.to_agraph(trace_graph)
+agraph = nx.nx_agraph.to_agraph(target_process_execution)
 agraph.draw("figures/target_process_execution.svg", prog="dot")

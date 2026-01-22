@@ -43,7 +43,7 @@ class ProcessExecution(DiGraph):
         Add value from node['attr'][attr_key] as attribute 'selected_attr' of the nodes.
         - G (Graph): networkx OCEL graph
         """
-        for node, data in list(G.nodes(data=True)):
+        for _, data in list(G.nodes(data=True)):
             a = data.get("attr")
             if a is None:
                 continue
@@ -89,12 +89,14 @@ def extract_process_execution(
     source_event: str,
     object_types: List[str],
     target_activity_type: str = None,
+    backward: bool = True,
 ) -> ProcessExecution:
     """
     G (Graph): NetworkX OCEL graph to extract process execution from;
     source_event (str): source event node to trace from;
     object_types (List[str]): object typese to consider for the trace;
     target_activity_type (str): activity type to end the trace;
+    backward (bool): whether to trace backward or forward.
     """
     events_to_check = [source_event]
     nodes_traced = set()
@@ -120,26 +122,32 @@ def extract_process_execution(
         trace_objects = [v for u, v, k in edges_event_object]
 
         selected_objects = [
-            o for o in trace_objects if G.nodes("attr")[o].get("ocel:type", "") in object_types
+            o
+            for o in trace_objects
+            if G.nodes("attr")[o].get("ocel:type", "") in object_types
         ]
+
+        trace_edges = list(G.in_edges(event, keys=True, data=True) if backward else G.out_edges(event, keys=True, data=True))
 
         # Prefer aggregation DF relationships
         edges_df = [
             (u, v, k)
-            for u, v, k, d in list(G.in_edges(event, keys=True, data=True))
+            for u, v, k, d in trace_edges
             if (d["attr"].get("type") == "DF_agg")
             and (d["attr"].get("object", "") in selected_objects)
         ]
         if not edges_df:
             edges_df = [
                 (u, v, k)
-                for u, v, k, d in list(G.in_edges(event, keys=True, data=True))
+                for u, v, k, d in trace_edges
                 if (d["attr"].get("type") == "DF")
                 and (d["attr"].get("object", "") in selected_objects)
             ]
         edges_traced.update(edges_df)
 
-        events_to_check.extend(list(set([u for u, v, k in edges_df]) - nodes_traced))
+        events_to_check.extend(
+            list(set([u if backward else v for u, v, k in edges_df]) - nodes_traced)
+        )
 
     return ProcessExecution(edge_subgraph(G, edges_traced))
 

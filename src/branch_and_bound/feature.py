@@ -3,7 +3,7 @@ from math import comb
 
 from typing import Any, Iterable, List, Tuple
 
-from ..process_execution import ProcessExecution
+from process_execution.process_execution import ProcessExecution
 
 
 def is_empty(iterator):

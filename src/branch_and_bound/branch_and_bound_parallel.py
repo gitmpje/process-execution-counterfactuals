@@ -7,10 +7,10 @@ from numpy import inf
 from queue import Empty
 from typing import Iterable, List
 
-from ..process_execution import ProcessExecution
+from process_execution.process_execution import ProcessExecution
 
-from .branch_and_bound import Action, BranchAndBoundCounterFactual
-from .feature import Feature
+from branch_and_bound import Action, BranchAndBoundCounterFactual
+from branch_and_bound.feature import Feature
 
 
 class BranchAndBoundCounterFactualParallel(BranchAndBoundCounterFactual):

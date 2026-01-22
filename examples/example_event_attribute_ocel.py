@@ -6,15 +6,15 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from analysis.branch_and_bound.feature import (
+from branch_and_bound.feature import (
     EventNodeDeletion,
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from analysis.branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
+from branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
 
-from analysis.process_execution import extract_process_execution, ProcessExecution
-from analysis.utils import build_ocel_dfg
+from process_execution.process_execution import extract_process_execution, ProcessExecution
+from process_execution.utils import build_ocel_dfg
 
 path_ocel = "data/example_event_attribute_ocel.json"
 
