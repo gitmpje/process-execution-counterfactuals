@@ -7,16 +7,25 @@ from typing import List, Tuple
 
 
 def build_ocel_dfg(
-    ocel: OCEL, selected_aggregation_activity_qualifier: List[Tuple[str, str]] = []
+    ocel: OCEL,
+    selected_aggregation_activity_qualifier: List[Tuple[str, str]] = None,
+    include_object_relations: bool = False,
 ) -> MultiDiGraph:
     """Build a Directly-Follows Graph (DFG) from an OCEL, including aggregation edges.
     Args:
         ocel (OCEL): The OCEL object.
-        selected_aggregation_activity_qualifier (List[Tuple[str, str]], optional): 
-            List of (activity, qualifier) pairs for which to add aggregation DF edges. 
+        selected_aggregation_activity_qualifier (List[Tuple[str, str]], optional):
+            List of (activity, qualifier) pairs for which to add aggregation DF edges.
             Defaults to [].
+        include_object_relations (bool): Whether to add object to object relations to the graph.
     Returns:
         MultiDiGraph: The constructed OCEL DFG with aggregation edges."""
+
+    selected_aggregation_activity_qualifier = (
+        selected_aggregation_activity_qualifier
+        if selected_aggregation_activity_qualifier
+        else []
+    )
 
     _ocel_nx = convert_ocel_to_networkx(ocel)
 
@@ -35,7 +44,7 @@ def build_ocel_dfg(
         f"{act}-{qual}" for act, qual in selected_aggregation_activity_qualifier
     ]
     ocel.relations["activity-qualifier"] = (
-        ocel.relations["ocel:activity"] + "-" + ocel.relations["ocel:qualifier"]
+        ocel.relations[ocel.event_activity] + "-" + ocel.relations[ocel.qualifier]
     )
 
     lifecycle = (
@@ -55,8 +64,8 @@ def build_ocel_dfg(
             lif = lifecycle[obj]
             # Add DF_agg for selected aggregation events, taking into account the E2O qualifier
             for event in relations_obj[
-                (relations_obj["ocel:activity"] == activity)
-                & (relations_obj["ocel:qualifier"] == qualifier)
+                (relations_obj[ocel.event_activity] == activity)
+                & (relations_obj[ocel.qualifier] == qualifier)
             ][ocel.event_id_column].values:
                 # Get preceding event from events that are not in the selected aggregation activity - qualifier pairs
                 lif_selected = relations_obj[
@@ -67,6 +76,11 @@ def build_ocel_dfg(
                     event,
                     attr={"type": "DF_agg", "object": obj},
                 )
+
+    if include_object_relations:
+        ocel_nx_o2o = convert_ocel_to_networkx(ocel, "ocel_features_to_nx")
+        ocel_nx.add_edges_from(ocel_nx_o2o.edges(data=True))
+
     return ocel_nx
 
 
@@ -80,14 +94,14 @@ def store_ocel_dfg_graphml(ocel_nx: MultiDiGraph, path_graphml: str):
     """
 
     # Convert timestamp attributes to ISO format strings
-    for n, d in ocel_nx.nodes(data=True):
+    for _, d in ocel_nx.nodes(data=True):
         if not d.get("attr", {}).get("ocel:timestamp"):
             continue
         if isinstance(d["attr"]["ocel:timestamp"], Timestamp):
             d["attr"]["ocel:timestamp"] = d["attr"]["ocel:timestamp"].isoformat()
 
     # Convert node attributes that are dictionaries into JSON strings so GraphML can store them
-    for n, d in ocel_nx.nodes(data=True):
+    for _, d in ocel_nx.nodes(data=True):
         for k, v in list(d.items()):
             if isinstance(v, dict):
                 try:
@@ -98,7 +112,7 @@ def store_ocel_dfg_graphml(ocel_nx: MultiDiGraph, path_graphml: str):
     # Convert edge attributes (handle MultiDiGraph and DiGraph)
     try:
         # MultiGraph/MultiDiGraph edges include keys
-        for u, v, key, ed in ocel_nx.edges(keys=True, data=True):
+        for _, _, _, ed in ocel_nx.edges(keys=True, data=True):
             for k, val in list(ed.items()):
                 if isinstance(val, dict):
                     try:
@@ -107,7 +121,7 @@ def store_ocel_dfg_graphml(ocel_nx: MultiDiGraph, path_graphml: str):
                         ed[k] = str(val)
     except TypeError:
         # fallback for Graph/DiGraph without keys
-        for u, v, ed in ocel_nx.edges(data=True):
+        for _, _, ed in ocel_nx.edges(data=True):
             for k, val in list(ed.items()):
                 if isinstance(val, dict):
                     try:
@@ -128,7 +142,7 @@ def load_graphml_with_json_attrs(path: str) -> Graph:
     G = read_graphml(path)
 
     # Nodes
-    for n, d in G.nodes(data=True):
+    for _, d in G.nodes(data=True):
         for k, v in list(d.items()):
             if isinstance(v, str):
                 try:
@@ -148,7 +162,7 @@ def load_graphml_with_json_attrs(path: str) -> Graph:
         keyed = False
 
     if keyed:
-        for u, v, key, ed in edges:
+        for _, _, _, ed in edges:
             for k, val in list(ed.items()):
                 if isinstance(val, str):
                     try:
@@ -158,7 +172,7 @@ def load_graphml_with_json_attrs(path: str) -> Graph:
                     except Exception:
                         pass
     else:
-        for u, v, ed in edges:
+        for _, _, ed in edges:
             for k, val in list(ed.items()):
                 if isinstance(val, str):
                     try:

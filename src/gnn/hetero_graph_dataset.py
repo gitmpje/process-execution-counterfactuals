@@ -4,24 +4,26 @@ import torch
 from collections import defaultdict
 from sklearn.model_selection import train_test_split
 from torch_geometric.data import HeteroData
-from typing import Dict
+from typing import Dict, List
 
 
 def construct_graph_dict(
-    trace_graph,
-    node_num_keys,
-    object_type_col,
-    event_activity,
-    y_key,
-    node_type_object="OBJECT",
-    node_type_event="EVENT",
+    trace_dict: dict,
+    node_num_keys: dict,
+    object_type_col: str,
+    event_activity: str,
+    y_key: str,
+    node_type_object: str = "OBJECT",
+    node_type_event: str = "EVENT",
+    activities: List[str] = None,
+    add_reverse_edges: bool = False,
 ):
     graph_dict = {}
     event_object_types = list(node_num_keys[node_type_object].keys()) + list(
         node_num_keys[node_type_event].keys()
     )
 
-    G = trace_graph["process_execution"]
+    G = trace_dict["process_execution"]
 
     # Collect nodes per type
     node_id_to_type = {}
@@ -50,8 +52,16 @@ def construct_graph_dict(
                 continue
 
             node_feats = [float(attr.get(k, 0.0)) for k in node_num_keys[node_type][t]]
+
+            # Add activity (event type) embedding
+            if activities and node_type == node_type_event:
+                activity_feats = [0] * len(activities)
+                activity_feats[activities.index(attr.get(event_activity))] = 1
+                node_feats.extend(activity_feats)
+
             if not node_feats:
                 node_feats = [float(0.0)]
+
             feats.append(node_feats)
 
         graph_dict[t] = feats
@@ -67,9 +77,16 @@ def construct_graph_dict(
         edge_type = (u_type, e_type, v_type)
         edge_dict[edge_type].append((type_to_idx[u_type][u], type_to_idx[v_type][v]))
 
+        # Add reverse edges
+        if add_reverse_edges and u_type != v_type:
+            rev_edge_type = (v_type, f"rev_{e_type}", u_type)
+            edge_dict[rev_edge_type].append(
+                (type_to_idx[v_type][v], type_to_idx[u_type][u])
+            )
+
     graph_dict |= edge_dict
 
-    graph_dict["y"] = trace_graph.get(y_key)
+    graph_dict["y"] = trace_dict.get(y_key)
 
     return graph_dict, type_to_nodes.keys(), edge_dict.keys()
 
@@ -81,57 +98,54 @@ def build_hetero_dataset(
     event_activity,
     viewpoint: str,
     y_key: str,
-    normalize: bool = False,
+    activities: List[str] = None,
+    add_reverse_edges: bool = False,
     path_dataset: str = None,
-):
+) -> List[HeteroData]:
     dataset = []
     node_types_set = set()
     edge_types_set = set()
-    for trace_graph in graphs.values():
-        graph_dict, node_types, edge_types = construct_graph_dict(
-            trace_graph, node_num_keys, object_type_col, event_activity, y_key
-        )
-
-        node_types_set.update(node_types)
-        edge_types_set.update(edge_types)
-
-        if viewpoint not in node_types:
-            raise ValueError(
-                f"No nodes of viewpoint type {viewpoint} occur in the graph"
-            )
-        if len(graph_dict[viewpoint]) > 1:
-            raise ValueError(
-                f"More than one node of viewpoint type {viewpoint} occurs in the graph"
+    for id, trace_dict in graphs.items():
+        try:
+            graph_dict, node_types, edge_types = construct_graph_dict(
+                trace_dict,
+                node_num_keys,
+                object_type_col,
+                event_activity,
+                y_key,
+                activities=activities,
+                add_reverse_edges=add_reverse_edges,
             )
 
-        hetero_data = HeteroData()
-        for t in node_types:
-            hetero_data[t].x = torch.tensor(graph_dict[t], dtype=torch.float32).reshape(
-                -1, 1
-            )
+            node_types_set.update(node_types)
+            edge_types_set.update(edge_types)
 
-        hetero_data[viewpoint].y = torch.tensor(
-            graph_dict["y"], dtype=torch.float32
-        ).reshape(-1, 1)
+            if viewpoint not in node_types:
+                raise ValueError(
+                    f"No nodes of viewpoint type {viewpoint} occur in graph {id}"
+                )
+            if len(graph_dict[viewpoint]) > 1:
+                raise ValueError(
+                    f"More than one node of viewpoint type {viewpoint} occurs in graph {id}"
+                )
 
-        for t in edge_types:
-            hetero_data[t].edge_index = torch.tensor(
-                graph_dict[t], dtype=torch.int64
-            ).t()
+            hetero_data = HeteroData()
+            for t in node_types:
+                hetero_data[t].x = torch.tensor(
+                    graph_dict[t], dtype=torch.float32
+                ).reshape(len(graph_dict[t]), -1)
 
-        dataset.append(hetero_data)
+            hetero_data[viewpoint].y = torch.tensor(graph_dict["y"]).reshape(-1, 1)
 
-    if normalize:
-        y_all = []
-        for graph in dataset:
-            y_all.extend(graph[viewpoint].y)
-        y_all = [t.item() for t in y_all]
-        y_mean = np.mean(y_all)
-        y_std = np.std(y_all)
-        print(f"y_mean={y_mean}, y_std={y_std}")
+            for t in edge_types:
+                hetero_data[t].edge_index = (
+                    torch.tensor(graph_dict[t], dtype=torch.int64).t().contiguous()
+                )
 
-        for graph in dataset:
-            graph[viewpoint].y = (graph[viewpoint].y - y_mean) / y_std
+            dataset.append(hetero_data)
+        except Exception as e:
+            print(f"Failed converting graph {id} to HeteroData")
+            raise e
 
     if path_dataset:
         torch.save(dataset, path_dataset)
@@ -218,9 +232,8 @@ def build_hetero_data(
     event_activity,
     viewpoint: str,
     node_y_mapping: Dict[str, float],
-    normalize: bool = False,
     path_dataset: str = None,
-):
+) -> HeteroData:
     hetero_data = HeteroData()
     graph_dict, node_types, edge_types = construct_graph_dict_multiple_viewpoint_nodes(
         graph,
@@ -239,19 +252,12 @@ def build_hetero_data(
             -1, 1
         )
 
-    hetero_data[viewpoint].y = torch.tensor(
-        graph_dict["y"], dtype=torch.float32
-    ).reshape(-1, 1)
+    hetero_data[viewpoint].y = torch.tensor(graph_dict["y"]).reshape(-1, 1)
 
     for t in edge_types:
-        hetero_data[t].edge_index = torch.tensor(graph_dict[t], dtype=torch.int64).t()
-
-    if normalize:
-        y_all = [t.item() for t in hetero_data[viewpoint].y if not np.isnan(t.item())]
-        y_mean = np.mean(y_all)
-        y_std = np.std(y_all)
-        print(f"y_mean={y_mean}, y_std={y_std}")
-        hetero_data[viewpoint].y = (hetero_data[viewpoint].y - y_mean) / y_std
+        hetero_data[t].edge_index = (
+            torch.tensor(graph_dict[t], dtype=torch.int64).t().contiguous()
+        )
 
     if path_dataset:
         torch.save(hetero_data, path_dataset)

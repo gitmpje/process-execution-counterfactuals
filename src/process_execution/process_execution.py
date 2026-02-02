@@ -1,9 +1,9 @@
 from itertools import combinations
 from typing import Generator, List, Set, Tuple
-from networkx import all_simple_edge_paths, edge_subgraph, DiGraph, Graph
+from networkx import all_simple_edge_paths, edge_subgraph, MultiDiGraph, Graph, subgraph
 
 
-class ProcessExecution(DiGraph):
+class ProcessExecution(MultiDiGraph):
     def construct_node_label(G: Graph):
         """
         Construct label based on attributes from node['attr'].
@@ -99,11 +99,12 @@ def extract_process_execution(
     backward (bool): whether to trace backward or forward.
     """
     events_to_check = [source_event]
-    nodes_traced = set()
+    events_traced = set()
     edges_traced = set()
+    objects_traced = set()
     while events_to_check:
         event = events_to_check.pop()
-        nodes_traced.add(event)
+        events_traced.add(event)
 
         # End trace when target activity type is encountered
         if target_activity_type and (
@@ -120,6 +121,7 @@ def extract_process_execution(
         edges_traced.update(edges_event_object)
 
         trace_objects = [v for u, v, k in edges_event_object]
+        objects_traced.update(trace_objects)
 
         selected_objects = [
             o
@@ -127,7 +129,11 @@ def extract_process_execution(
             if G.nodes("attr")[o].get("ocel:type", "") in object_types
         ]
 
-        trace_edges = list(G.in_edges(event, keys=True, data=True) if backward else G.out_edges(event, keys=True, data=True))
+        trace_edges = list(
+            G.in_edges(event, keys=True, data=True)
+            if backward
+            else G.out_edges(event, keys=True, data=True)
+        )
 
         # Prefer aggregation DF relationships
         edges_df = [
@@ -146,10 +152,13 @@ def extract_process_execution(
         edges_traced.update(edges_df)
 
         events_to_check.extend(
-            list(set([u if backward else v for u, v, k in edges_df]) - nodes_traced)
+            list(set([u if backward else v for u, v, k in edges_df]) - events_traced)
         )
 
-    return ProcessExecution(edge_subgraph(G, edges_traced))
+    object_graph = subgraph(G, objects_traced)
+    selected_graph = MultiDiGraph(edge_subgraph(G, edges_traced))
+    selected_graph.add_edges_from(object_graph.edges(data=True))
+    return ProcessExecution(selected_graph)
 
 
 def check_edges_normalize(edges: List[Tuple[str]], normalize_events: List[str]) -> bool:

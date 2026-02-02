@@ -15,14 +15,12 @@ class HANConvTrainer:
         device,
         criterion,
         output_type: str = "binary",
-        start_patience: int = 100,
     ):
         self.model = model
         self.viewpoint = viewpoint
         self.device = device
         self.criterion = criterion
         self.output_type = output_type
-        self.start_patience = start_patience
 
     def train_epoch(self, data_loader, learning_rate=0.005):
         self.model.to(self.device)  # Move the model to the GPU (or CPU)
@@ -39,8 +37,14 @@ class HANConvTrainer:
             batch = batch.to(self.device)
 
             optimizer.zero_grad()
+
             out = self.model(batch.x_dict, batch.edge_index_dict)
-            loss = self.criterion(out, batch.y_dict[self.viewpoint])
+
+            y_target = batch.y_dict[self.viewpoint]
+            if self.output_type == "binary":
+                y_target = y_target.reshape(-1)
+
+            loss = self.criterion(out, y_target)
 
             loss.backward()
             optimizer.step()
@@ -61,7 +65,12 @@ class HANConvTrainer:
             batch = batch.to(self.device)
 
             out = self.model(batch.x_dict, batch.edge_index_dict)
-            loss = self.criterion(out, batch.y_dict[self.viewpoint])
+
+            y_target = batch.y_dict[self.viewpoint]
+            if self.output_type == "binary":
+                y_target = y_target.reshape(-1)
+
+            loss = self.criterion(out, y_target)
 
             test_loss += loss
             to_div += batch.batch_size
@@ -119,18 +128,26 @@ class HANConvTrainer:
 
         return total_abs_error / total_count
 
-    def train(self, train_loader, val_loader, test_loader):
+    def train(
+        self,
+        train_loader,
+        val_loader,
+        test_loader,
+        n_epochs: int = 100,
+        start_patience: int = 10,
+        learning_rate: float = 0.005,
+    ):
         min_loss = inf
-        patience = self.start_patience
-        for epoch in range(1, 200):
-            train_loss = self.train_epoch(train_loader)
+        patience = start_patience
+        for epoch in range(n_epochs):
+            train_loss = self.train_epoch(train_loader, learning_rate)
             val_loss = self.test(val_loader)
 
             val_acc, val_f1 = None, None
             if self.output_type == "binary":
                 val_acc, val_f1 = self.evaluate_acc(val_loader)
 
-            if epoch % 5 == 0 or epoch == 1:
+            if epoch % 5 == 0:
                 val_f1_str = (
                     f", val_acc={val_acc:.4f}, val_f1={val_f1:.4f}" if val_acc else ""
                 )
@@ -140,14 +157,14 @@ class HANConvTrainer:
 
             if val_loss < min_loss:
                 min_loss = val_loss
-                patience = self.start_patience
+                patience = start_patience
             else:
                 patience -= 1
 
             if patience <= 0:
                 print(
                     "Stopping training as validation Loss did not improve "
-                    f"for {self.start_patience} epochs"
+                    f"for {start_patience} epochs"
                 )
                 break
         test_loss = self.test(test_loader)
@@ -177,7 +194,7 @@ class HAN(nn.Module):
         self.viewpoint = viewpoint
         self.metadata = metadata
 
-        self.han_convs = []
+        self.han_convs = nn.ModuleList()
         for _ in range(num_layers):
             self.han_convs.append(
                 HANConv(
@@ -217,9 +234,12 @@ class HANConvTrainerWithMasks(HANConvTrainer):
 
             train_mask = batch[self.viewpoint].train_mask
             if train_mask.sum() > 0:
-                loss = self.criterion(
-                    out[train_mask], batch.y_dict[self.viewpoint][train_mask]
-                )
+                y_target = batch.y_dict[self.viewpoint][train_mask]
+                if self.output_type == "binary":
+                    y_target = y_target.reshape(-1)
+
+                loss = self.criterion(out[train_mask], y_target)
+
                 loss.backward()
                 optimizer.step()
 
@@ -242,7 +262,11 @@ class HANConvTrainerWithMasks(HANConvTrainer):
 
             mask = getattr(batch[self.viewpoint], f"{mask_type}_mask")
             if mask.sum() > 0:
-                loss = self.criterion(out[mask], batch.y_dict[self.viewpoint][mask])
+                y_target = batch.y_dict[self.viewpoint][mask]
+                if self.output_type == "binary":
+                    y_target = y_target.reshape(-1)
+
+                loss = self.criterion(out[mask], y_target)
                 total_loss += loss.item() * mask.sum().item()
                 total_count += mask.sum().item()
 
@@ -288,7 +312,7 @@ class HANConvTrainerWithMasks(HANConvTrainer):
         return total_abs_error / total_count if total_count > 0 else float("nan")
 
     def train(self, data_loader):
-        min_loss = inf
+        min_score = inf
         patience = self.start_patience
         for epoch in range(1, 200):
             train_loss = self.train_epoch(data_loader)
@@ -297,33 +321,36 @@ class HANConvTrainerWithMasks(HANConvTrainer):
             val_acc, val_f1 = None, None
             if self.output_type == "binary":
                 val_acc, val_f1 = self.evaluate_acc(data_loader, mask_type="val")
+                eval_score = val_acc
+            else:
+                eval_score = val_loss
 
             if epoch % 5 == 0 or epoch == 1:
                 val_f1_str = (
                     f", val_acc={val_acc:.4f}, val_f1={val_f1:.4f}" if val_acc else ""
                 )
                 print(
-                    f"Epoch: {epoch:03d}, Loss: {train_loss:.4f}, {val_loss:.4f}{val_f1_str}"
+                    f"Epoch: {epoch:03d}, loss: {train_loss:.4f}, {val_loss:.4f}{val_f1_str}"
                 )
 
-            if val_loss < min_loss:
-                min_loss = val_loss
+            if eval_score < min_score:
+                min_score = eval_score
                 patience = self.start_patience
             else:
                 patience -= 1
 
             if patience <= 0:
                 print(
-                    "Stopping training as validation Loss did not improve "
+                    "Stopping training as validation score did not improve "
                     f"for {self.start_patience} epochs"
                 )
                 break
+
         test_loss = self.test(data_loader, mask_type="test")
-        print(f"Final test Loss: {test_loss:.4f}")
+        print(f"Final test loss: {test_loss:.4f}")
         if self.output_type == "binary":
             test_acc, test_f1 = self.evaluate_acc(data_loader, mask_type="test")
             print("Final test acc:", test_acc, ", test f1:", test_f1)
-
-        if self.output_type == "continuous":
+        elif self.output_type == "continuous":
             test_mae = self.evaluate_mae(data_loader, mask_type="test")
             print("Final test MAE:", test_mae)

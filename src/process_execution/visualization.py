@@ -31,7 +31,7 @@ def apply_node_styles_nx(
             "DEFAULT": default_color,
         }
 
-    for node, data in G.nodes(data=True):
+    for _, data in G.nodes(data=True):
         tooltip_data = {}
 
         # First try direct top-level type
@@ -78,17 +78,22 @@ def apply_node_styles_nx(
 
 
 def apply_edge_styles_nx(G: ProcessExecution):
-    for u, v, ed in G.edges(data=True):
+    for _, _, ed in G.edges(data=True):
         if ed["attr"].get("type", "") in ("DF", "DF_agg"):
             ed["style"] = "solid"
-        else:
+        elif ed["attr"].get("type", "") in ("E2O"):
             ed["style"] = "dashed"
             ed["penwidth"] = "0.5"
+        else:
+            ed["style"] = "dotted"
+
+            # Give other edge types lower weight in the layout
+            ed["weight"] = "0"
 
 
 def visualize_with_svg_and_js(
     trace_graph: ProcessExecution,
-    normalized_subgraphs: list = [],
+    normalized_subgraphs: list = None,
     out_prefix: str = "process_execution",
 ):
     """Create an interactive HTML using native SVG with Graphviz layout, preserving original agraph styles.
@@ -98,6 +103,7 @@ def visualize_with_svg_and_js(
     - normalized_subgraphs: list of networkx subgraphs to be highlighted
     - out_prefix: output file prefix (files placed into `figures/`)
     """
+    normalized_subgraphs = normalized_subgraphs if normalized_subgraphs else []
 
     G = trace_graph
 
@@ -312,10 +318,10 @@ def visualize_highlight_normalized(
             highlight_edge_color = "#ff7f0e"
 
             # set dim styles first
-            for n, d in H.nodes(data=True):
+            for _, d in H.nodes(data=True):
                 d["style"] = "filled"
                 d["fillcolor"] = dim_node_color
-            for u, v, ed in H.edges(data=True):
+            for _, _, ed in H.edges(data=True):
                 ed["color"] = dim_edge_color
                 ed["penwidth"] = "1"
 

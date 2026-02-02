@@ -165,6 +165,8 @@ class BranchAndBoundCounterFactual:
         self.log_level = log_level
         self.selected_actions = []
 
+        self.count = 0
+
         self.logger = self._configure_logger()
 
     def select_feature(self, available_features: List[Feature]) -> Feature | None:
@@ -209,6 +211,23 @@ class BranchAndBoundCounterFactual:
         """
         self.logger.debug("%s", action)
 
+        # Check if there is no selected action with lower objective value
+        if any(
+            action.objective_value() >= selected_action.objective_value()
+            for selected_action in self.selected_actions
+        ):
+            return
+
+        # Check process outcome after applying changes
+        process_execution_c = action.apply_changes(deepcopy(process_execution))
+        outcome_c = self.process_outcome(process_execution_c)
+        self.logger.debug("Process outcome: %s", outcome_c)
+        if outcome_c == self.counterfactual_label:
+            print(process_execution_c.nodes(), outcome_c)
+            self.logger.info("Found counterfactual: %s", action)
+            self.selected_actions.append(deepcopy(action))
+            return
+
         selected_feature = self.select_feature(available_features)
         if not selected_feature:
             return
@@ -223,21 +242,6 @@ class BranchAndBoundCounterFactual:
 
             # Check if action size does not exceed limit
             if action_prime.action_size() > self.max_changes:
-                continue
-
-            # Check if there is no selected action with lower objective value
-            if any(
-                action_prime.objective_value() >= selected_action.objective_value()
-                for selected_action in self.selected_actions
-            ):
-                continue
-
-            # Check process outcome after applying changes
-            process_execution_c = action.apply_changes(deepcopy(process_execution))
-            outcome_c = self.process_outcome(process_execution_c)
-            if outcome_c == self.counterfactual_label:
-                self.logger.info("Found counterfactual: %s", action)
-                self.selected_actions.append(deepcopy(action))
                 return
 
             self.enumerate(
@@ -245,6 +249,10 @@ class BranchAndBoundCounterFactual:
                 available_features.copy(),
                 process_execution,
             )
+
+            self.count += 1
+            if self.count % 50 == 0:
+                self.logger.info(f"Evaluated {self.count} actions")
 
     def _configure_logger(self):
         logger = logging.getLogger(__name__)

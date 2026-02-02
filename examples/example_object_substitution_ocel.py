@@ -32,13 +32,13 @@ ocel_nx = build_ocel_dfg(ocel, selected_aggregation_activity_qualifier)
 # %% Extract process executions
 # Extract events related to target object types
 df_events = ocel.events.copy()
-df_events.set_index("ocel:eid", inplace=True)
+df_events.set_index(ocel.event_id_column, inplace=True)
 df_relations = ocel.relations.copy()
-df_relations.set_index("ocel:eid", inplace=True)
+df_relations.set_index(ocel.event_id_column, inplace=True)
 df_events_objects = df_events.join(df_relations, rsuffix="_relations")
 
 events_to_trace = df_events_objects[
-    (df_events_objects["ocel:type"].isin(target_object_types))
+    (df_events_objects[ocel.object_type_column].isin(target_object_types))
 ].index.values
 
 print(f"Number of events selected: {len(events_to_trace)}")
@@ -97,13 +97,13 @@ for node_id, data in target_process_execution.nodes(data=True):
         continue
 
     # Only allow substitution of production resources
-    if data["attr"].get("ocel:type", "") != "ProductionResource":
+    if data["attr"].get(ocel.object_type_column, "") != "ProductionResource":
         continue
 
     substitution_objects = [
         (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get("ocel:type", "") == data["attr"].get("ocel:type", "")
+        if subst_data["attr"].get(ocel.object_type_column, "") == data["attr"].get(ocel.object_type_column, "")
         and subst_data["attr"].get("capability", "")
         == data["attr"].get("capability", "")
     ]

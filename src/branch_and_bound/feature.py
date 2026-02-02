@@ -142,8 +142,12 @@ class ObjectNodeSubstitution(Feature):
         p.remove_edges_from(remove_edges)
         p.add_edges_from(add_edges)
 
-        # Remove isolated object node
-        if not p.in_edges(self.object_id):
+        # Remove isolated object nodes (no incoming E2O edges)
+        if not any(
+            (u, v)
+            for u, v, attr in p.in_edges(self.object_id, data="attr")
+            if attr["type"] == "E2O"
+        ):
             p.remove_node(self.object_id)
 
         return p
