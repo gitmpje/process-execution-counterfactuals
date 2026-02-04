@@ -10,18 +10,17 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from branch_and_bound.feature import (
+from tree_search.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from branch_and_bound.branch_and_bound import (
-    Action,
-    BranchAndBoundCounterFactual,
+from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.tree_search_parallel import TreeSearchCounterFactualParallel
+
+from process_execution.process_execution import (
+    extract_process_execution,
+    ProcessExecution,
 )
-from branch_and_bound.branch_and_bound_parallel import (
-    BranchAndBoundCounterFactualParallel,
-)
-from process_execution.process_execution import extract_process_execution, ProcessExecution
 from process_execution.utils import load_graphml_with_json_attrs
 from gnn.gcn_graph_classification import convert_trace_graphs_to_pyg
 from process_execution.visualization import (
@@ -116,8 +115,6 @@ with open(path_vocab) as f:
 node_labels = vocab_dict["node_labels"]
 node_numeric_keys = vocab_dict["node_numeric_keys"]
 
-node_types = ["EVENT", "PackingUnit", "ProductionLot", "ProductionResource"]
-
 # Load trained model
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = torch.load(path_model, weights_only=False)
@@ -138,7 +135,7 @@ def process_outcome(p: ProcessExecution):
     try:
         graph_map = {"_tmp": {"process_execution": p}}
         data_list = convert_trace_graphs_to_pyg(
-            graph_map, node_types, node_numeric_keys, []
+            graph_map, node_labels, node_numeric_keys, []
         )
         if not data_list:
             raise RuntimeError("converter returned empty list")
@@ -147,11 +144,12 @@ def process_outcome(p: ProcessExecution):
         print("process_outcome: conversion to PyG data failed:", e)
         raise
 
+    batch_vec = torch.zeros(data.x.size(0), dtype=torch.long, device=device)
     data = data.to(device)
     # Forward through the model
     try:
         with torch.no_grad():
-            out = model(data.x_dict, data.edge_index_dict)
+            out = model(data.x, data.edge_index, batch_vec)
 
             # Expecting graph-level logits shaped (1, n_classes)
             if out.dim() == 2 and out.size(0) == 1:
@@ -166,7 +164,7 @@ def process_outcome(p: ProcessExecution):
     return bool(pred)
 
 
-# %% Configure counterfactual generation (branch & bound)
+# %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
 target_process_execution_id = "100023"
 
@@ -174,7 +172,7 @@ selected_event_attributes = {
     "a": arange(0, 1.01, 0.5),
     "quantity": range(0, 1001, 500),
 }
-max_changes = 10
+max_change_size = 10
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
 
 target_process_execution = trace_graphs[target_process_execution_id][
@@ -194,20 +192,18 @@ for node_id, data in target_process_execution.nodes(data=True):
     substitution_objects = [
         (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get(ocel.object_type_column, "") == data["attr"].get(ocel.object_type_column, "")
+        if subst_data["attr"].get(ocel.object_type_column, "")
+        == data["attr"].get(ocel.object_type_column, "")
         and subst_data["attr"].get("capability", "")
         == data["attr"].get("capability", "")
+        and subst_id != node_id
     ]
 
-    object_substitution_features.extend(
-        [
-            ObjectNodeSubstitution(
-                event_id=event_id,
-                object_id=node_id,
-                substitution_objects=substitution_objects,
-            )
-            for event_id, _ in target_process_execution.in_edges(node_id)
-        ]
+    object_substitution_features.append(
+        ObjectNodeSubstitution(
+            object_id=node_id,
+            substitution_objects=substitution_objects,
+        )
     )
 
 # Features for event node attributes
@@ -215,6 +211,7 @@ event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
+        value_original=attr[attr_name],
         value_range=selected_event_attributes[attr_name],
     )
     for node_id, attr in target_process_execution.nodes(data="attr")
@@ -228,50 +225,50 @@ available_features = event_node_attributes  # + object_substitution_features
 for feature in available_features:
     print(feature)
 
-# %% Run branch and bound algorithm to find counter factuals
-branch_and_bound = BranchAndBoundCounterFactual(
+# %% Run tree search algorithm to find counter factuals
+tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
-    max_changes=max_changes,
+    max_change_size=max_change_size,
     counterfactual_label=counter_factual_label,
 )
 
-branch_and_bound.enumerate(
-    Action(),
-    available_features,
+selected_actions = tree_search.search_layer(
+    [(Action(), available_features)],
     target_process_execution,
 )
-selected_actions = branch_and_bound.selected_actions
 
-
-# %% Run branch and bound algorithm in parallel
-branch_and_bound_parallel = BranchAndBoundCounterFactualParallel(
+# %% Run tree search algorithm in parallel
+tree_search_parallel = TreeSearchCounterFactualParallel(
     process_outcome=process_outcome,
-    max_changes=max_changes,
+    max_changes=max_change_size,
     counterfactual_label=counter_factual_label,
     num_workers=5,
 )
 
-selected_actions = branch_and_bound_parallel.find_counterfactuals(
+selected_actions = tree_search_parallel.find_counterfactuals(
     available_features,
     target_process_execution,
 )
 
 # %% Display results
-print("Number of selected actions: ", len(selected_actions))
-for selected_action in selected_actions:
-    print("Objective value:", selected_action.objective_value())
-    print(
-        [
-            f"{feature}: {change_value}"
-            for feature, change_value in selected_action.node_attributes_modification.items()
-            if change_value != 0
-        ],
-        [
-            (feature.event_id, feature.object_id, subst[0])
-            for feature, subst in selected_action.object_substitution.items()
-            if subst and feature.object_id != subst[0]
-        ],
-    )
+if selected_actions:
+    print("Number of selected actions: ", len(selected_actions))
+    for selected_action in selected_actions:
+        print("Objective value:", selected_action.objective_value())
+        print(
+            [
+                f"{feature}: {change_value}"
+                for feature, change_value in selected_action.node_attributes_modification.items()
+                if change_value != 0
+            ],
+            [
+                (feature.event_id, feature.object_id, subst[0])
+                for feature, subst in selected_action.object_substitution.items()
+                if subst and feature.object_id != subst[0]
+            ],
+        )
+else:
+    print("No counterfactual actions found")
 
 # %% Visualize target process execution
 apply_node_styles_nx(target_process_execution)  # apply coloring + tooltip

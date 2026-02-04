@@ -1,5 +1,4 @@
 # %% Import dependencies
-
 import os
 import pm4py
 
@@ -7,12 +6,15 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from branch_and_bound.feature import (
+from tree_search.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
-from branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
-from process_execution.process_execution import extract_process_execution, ProcessExecution
+from tree_search.tree_search import Action, TreeSearchCounterFactual
+from process_execution.process_execution import (
+    extract_process_execution,
+    ProcessExecution,
+)
 from process_execution.utils import build_ocel_dfg
 
 path_ocel = "data/example_object_substitution_ocel.json"
@@ -67,7 +69,7 @@ for event in events_to_trace:
 
 print("Classes:", Counter([d["class"] for d in trace_graphs.values()]))
 
-# %% Configure counterfactual generation (branch & bound)
+# %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
 target_process_execution_id = "198"
 
@@ -75,9 +77,8 @@ selected_event_attributes = {
     "temperature": arange(0, 1.01, 0.5),
     "quantity": range(0, 1001, 500),
 }
-max_changes = 10
+max_change_size = 10
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
-num_workers = 1
 
 
 # Define dummy function that determines process outcome
@@ -103,20 +104,18 @@ for node_id, data in target_process_execution.nodes(data=True):
     substitution_objects = [
         (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get(ocel.object_type_column, "") == data["attr"].get(ocel.object_type_column, "")
+        if subst_data["attr"].get(ocel.object_type_column, "")
+        == data["attr"].get(ocel.object_type_column, "")
         and subst_data["attr"].get("capability", "")
         == data["attr"].get("capability", "")
+        and subst_id != node_id
     ]
 
-    object_substitution_features.extend(
-        [
-            ObjectNodeSubstitution(
-                event_id=event_id,
-                object_id=node_id,
-                substitution_objects=substitution_objects,
-            )
-            for event_id, _ in target_process_execution.in_edges(node_id)
-        ]
+    object_substitution_features.append(
+        ObjectNodeSubstitution(
+            object_id=node_id,
+            substitution_objects=substitution_objects,
+        )
     )
 
 # Features for event node attributes
@@ -124,6 +123,7 @@ event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
+        value_original=attr[attr_name],
         value_range=selected_event_attributes[attr_name],
     )
     for node_id, attr in target_process_execution.nodes(data="attr")
@@ -132,26 +132,24 @@ event_node_attributes = [
     if attr_name in selected_event_attributes
 ]
 
-branch_and_bound = BranchAndBoundCounterFactual(
-    process_outcome=process_outcome,
-    max_changes=max_changes,
-    counterfactual_label=counter_factual_label,
-    num_workers=num_workers,
-)
-
-# %% Run branch and bound algorithm to find counter factuals
 available_features = object_substitution_features + event_node_attributes
 for feature in available_features:
     print(feature)
 
-print(
-    "Maximum number of actions to evaluate: ",
-    branch_and_bound.maximum_number_of_actions(available_features),
+tree_search = TreeSearchCounterFactual(
+    process_outcome=process_outcome,
+    max_change_size=max_change_size,
+    counterfactual_label=counter_factual_label,
 )
 
-selected_actions = branch_and_bound.enumerate(
-    Action(),
-    available_features,
+print(
+    "Maximum number of actions to evaluate: ",
+    tree_search.maximum_number_of_actions(available_features),
+)
+
+# %% Run tree search algorithm to find counter factuals
+selected_actions = tree_search.search_layer(
+    [(Action(), available_features)],
     target_process_execution,
 )
 

@@ -10,8 +10,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
-from branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
-from branch_and_bound.feature import NodeAttributeNumeric, ObjectNodeSubstitution
+from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.feature import NodeAttributeNumeric, ObjectNodeSubstitution
 from gnn.han_node_level import HAN, HANConvTrainer
 from gnn.hetero_graph_dataset import build_hetero_dataset
 from process_execution.process_execution import (
@@ -254,12 +254,12 @@ def define_process_outcome(orig_value, threshold):
     return process_outcome
 
 
-# %% Configure counterfactual generation (branch & bound)
+# %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
 target_process_execution_id = "reg_co10"
 counter_factual_threshold = 0.2
 counter_factual_label = True
-max_changes = 10
+max_change_size = 10
 
 selected_event_attributes = {
     "quantity": range(0, 1001, 500),
@@ -288,17 +288,14 @@ for node_id, data in target_process_execution.nodes(data=True):
         for subst_id, subst_data in ocel_nx.nodes(data=True)
         if subst_data["attr"].get(ocel.object_type_column, "")
         == data["attr"].get(ocel.object_type_column, "")
+        and subst_id != node_id
     ]
 
-    object_substitution_features.extend(
-        [
-            ObjectNodeSubstitution(
-                event_id=event_id,
-                object_id=node_id,
-                substitution_objects=substitution_objects,
-            )
-            for event_id, _ in target_process_execution.in_edges(node_id)
-        ]
+    object_substitution_features.append(
+        ObjectNodeSubstitution(
+            object_id=node_id,
+            substitution_objects=substitution_objects,
+        )
     )
 
 # Features for event node attributes
@@ -306,6 +303,7 @@ event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
+        value_original=attr[attr_name],
         value_range=selected_event_attributes[attr_name],
     )
     for node_id, attr in target_process_execution.nodes(data="attr")
@@ -320,19 +318,17 @@ for feature in available_features:
     print(feature)
 print(f"Total number of features: {len(available_features)}")
 
-# %% Run branch and bound algorithm to find counter factuals
-branch_and_bound = BranchAndBoundCounterFactual(
+# %% Run tree search algorithm to find counter factuals
+tree_search = TreeSearchCounterFactual(
     process_outcome=define_process_outcome(original_y, counter_factual_threshold),
-    max_changes=max_changes,
+    max_change_size=max_change_size,
     counterfactual_label=counter_factual_label,
 )
 
-branch_and_bound.enumerate(
-    Action(),
-    available_features,
+selected_actions = tree_search.search_layer(
+    [(Action(), available_features)],
     target_process_execution,
 )
-selected_actions = branch_and_bound.selected_actions
 
 # %% Display results
 print("Number of selected actions: ", len(selected_actions))

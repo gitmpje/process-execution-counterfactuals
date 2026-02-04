@@ -1,18 +1,9 @@
 from itertools import combinations
 from math import comb
 
-from typing import Any, Iterable, List, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 
 from process_execution.process_execution import ProcessExecution
-
-
-def is_empty(iterator):
-    try:
-        next(iterator)
-    except StopIteration:
-        return True
-    else:
-        return False
 
 
 class Feature:
@@ -29,9 +20,10 @@ class NodeAttributeNumeric(Feature):
     """
     Feature representing a node attribute that can be modified.
     Attributes:
-        node_id (str): The ID of the node whose attribute is being modified.
-        attribute_name (str): The name of the attribute to be modified.
-        value_range (Iterable): The range of possible values for the attribute.
+        node_id (str): Identifier of the node whose attribute is being modified.
+        attribute_name (str): Nme of the attribute to be modified.
+        value_original (int | float | complex): Original value of the node attribute.
+        value_range (Iterable): Range of possible values for the attribute.
     """
 
     def __init__(
@@ -39,11 +31,13 @@ class NodeAttributeNumeric(Feature):
         *args,
         node_id: str,
         attribute_name: str,
+        value_original: int | float | complex,
         value_range: Iterable[int | float | complex],
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.node_id = node_id
+        self.value_original = value_original
         self.attribute_name = attribute_name
         self.value_range = value_range
 
@@ -54,17 +48,22 @@ class NodeAttributeNumeric(Feature):
         return len(self.value_range)
 
     def action_space(
-        self, current_change: int | float | complex
+        self,
+        change_lower: int | float | complex = 1,
+        change_upper: int | float | complex = 1,
     ) -> Iterable[int | float | complex]:
         """
         Generate possible values for the node attribute feature.
         Args:
-            current_change (int | float | complex): The current change value for the attribute.
+            change_lower (int | float | complex): Lower bound of the change value.
+            change_upper (int | float | complex): Upper bound of the change value.
         Yields:
             Iterable[int | float | complex]: Possible values for the attribute.
         """
+
+        # TODO: improve calculation of the size of the change
         for v in self.value_range:
-            if v >= current_change:
+            if v >= change_lower and v < change_upper:
                 yield v
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
@@ -84,23 +83,26 @@ class ObjectNodeSubstitution(Feature):
     """
     Feature representing possible object node substitutions in a process execution.
     Attributes:
+        object_id (str): identifier of the object to substitute.
         substitution_objects (List[Tuple[str, dict]]):
             An iterable of lists of substitution objects, where each substitution object is a tuple
             containing the substitute node (ID and attributes).
+        event_id (Optional[str]): identifier of the event to substitute the object for.
+            If not defined, the object is substituted for all events in the graph.
     """
 
     def __init__(
         self,
         *args,
-        event_id: str,
         object_id: str,
         substitution_objects: List[Tuple[str, dict]],
+        event_id: Optional[str] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.event_id = event_id
         self.object_id = object_id
         self.substitution_objects = substitution_objects
+        self.event_id = event_id
 
     def __repr__(self) -> str:
         return f"Event {self.event_id} - object {self.object_id} with {len(self.substitution_objects)} substitution options (action space size {self.action_space_size()})"
@@ -108,15 +110,19 @@ class ObjectNodeSubstitution(Feature):
     def action_space_size(self):
         return len(self.substitution_objects)
 
-    def action_space(self, current_change=None) -> Iterable[Tuple[str, dict]]:
+    def action_space(
+        self, change_lower: int = 1, change_upper: int = 1
+    ) -> Iterable[Tuple[str, dict]]:
         """
         Generate possible substitution options for the object node feature.
         Args:
-            current_change: The current substitution option.
+            change_lower (int | float | complex): Lower bound of the change value.
+            change_upper (int | float | complex): Upper bound of the change value.
         Yields:
             Iterable[Tuple[str, dict]]: substitution object.
         """
 
+        # TODO: implement change size check
         for obj in self.substitution_objects:
             yield obj
 
@@ -136,7 +142,7 @@ class ObjectNodeSubstitution(Feature):
         remove_edges = []
         add_edges = []
         for u, v, d in p.in_edges(self.object_id, data=True):
-            if u == self.event_id:
+            if u == self.event_id or not self.event_id:
                 remove_edges.append((u, v))
                 add_edges.append((u, subst_object_id, d))
         p.remove_edges_from(remove_edges)
@@ -191,23 +197,26 @@ class EventNodeDeletion(Feature):
                 size += comb(len(self.allowed_deletions), r)
             return size
 
-    def action_space(self, current_change) -> Iterable[List[str]]:
+    def action_space(
+        self, change_lower: int = 1, change_upper: int = 1
+    ) -> Iterable[List[str]]:
         """
         Generate possible deletion options for the object node feature.
         Args:
-            current_change: The current deletion option.
+            change_lower (int | float | complex): Lower bound of the change value.
+            change_upper (int | float | complex): Upper bound of the change value.
         Yields:
             Iterable[List[str]]: Possible deletion options.
         """
 
         if self.deletion_options:
             for option in self.deletion_options:
-                if len(option) >= len(current_change):
+                if len(option) >= change_lower and len(option) < change_upper:
                     yield option
         else:
             for r in range(len(self.allowed_deletions) + 1):
                 for c in combinations(self.allowed_deletions, r):
-                    if len(c) >= len(current_change):
+                    if len(c) >= change_lower and len(c) < change_upper:
                         yield c
 
     def apply_change(

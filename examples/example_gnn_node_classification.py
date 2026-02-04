@@ -8,14 +8,10 @@ import torch
 
 from collections import Counter
 from networkx import Graph
-from sklearn.model_selection import train_test_split
-from torch.utils.data import Subset
-from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import AddMetaPaths
 
-from branch_and_bound.branch_and_bound import Action, BranchAndBoundCounterFactual
-from branch_and_bound.feature import NodeAttributeNumeric, ObjectNodeSubstitution
-from gnn.han_node_level import HAN, HANConvTrainer
+from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.feature import NodeAttributeNumeric, ObjectNodeSubstitution
 from gnn.hetero_graph_dataset import build_hetero_dataset
 from process_execution.process_execution import (
     extract_process_execution,
@@ -180,81 +176,6 @@ node_num_keys = {
     NODE_TYPE_EVENT: event_num_keys,
 }
 
-dataset, node_types_set, edge_types_set = build_hetero_dataset(
-    trace_graphs,
-    node_num_keys,
-    ocel.object_type_column,
-    ocel.event_activity,
-    viewpoint,
-    y_key,
-    activities=activities,
-    path_dataset=path_dataset,
-)
-
-# Apply transforms
-# for i in range(len(dataset)):
-#     for t in transforms:
-#         try:
-#             dataset[i] = t(dataset[i])
-#         except AssertionError:
-#             print(f"Skipping {t} for dataset item {i}")
-
-# # Add metapaths to edge type set
-# for d in dataset:
-#     try:
-#         edge_types_set.update(d.metapath_dict.keys())
-#     except KeyError:
-#         continue
-
-# if path_dataset:
-#     torch.save(dataset, path_dataset)
-
-# %% Create train/validate/test dataset
-device = "cuda" if torch.cuda.is_available() else "cpu"
-batch_size = 10
-
-dataset = torch.load(path_dataset, weights_only=False)
-
-train_idx, test_idx = train_test_split(
-    list(range(len(dataset))),
-    test_size=0.4,
-    random_state=1,
-)
-train_idx, val_idx = train_test_split(train_idx, test_size=0.1, random_state=1)
-
-train_ds = Subset(dataset, train_idx)
-val_ds = Subset(dataset, val_idx)
-test_ds = Subset(dataset, test_idx)
-train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_ds, batch_size=batch_size)
-test_loader = DataLoader(test_ds, batch_size=batch_size)
-
-# %% Define and train model
-model = HAN(
-    in_channels=-1,
-    out_channels=2,
-    num_layers=1,
-    viewpoint=viewpoint,
-    metadata=[node_types_set, edge_types_set],
-)
-trainer = HANConvTrainer(
-    model=model,
-    viewpoint=viewpoint,
-    device=device,
-    criterion=torch.nn.CrossEntropyLoss(),
-    output_type="binary",
-)
-trainer.train(
-    train_loader,
-    val_loader,
-    test_loader,
-    n_epochs=200,
-    start_patience=50,
-    # learning_rate=0.01,
-)
-
-torch.save(model, path_model)
-
 # %% Load model and define process outcome function
 # Load trained model
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -289,14 +210,14 @@ def process_outcome(p: ProcessExecution) -> bool:
     return bool(out.argmax(dim=-1).cpu().item())
 
 
-# %% Configure counterfactual generation (branch & bound)
+# %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
 target_process_execution_id = "14602"
 counterfactual_label = not trace_graphs[target_process_execution_id]["class"]
-max_changes = 10
+max_change_size = 10
 
 selected_event_attributes = {
-    "quantity": range(0, 1001, 500),
+    # "quantity": range(0, 1001, 500),
 }
 
 target_process_execution = trace_graphs[target_process_execution_id][
@@ -306,8 +227,6 @@ target_process_execution = trace_graphs[target_process_execution_id][
 # Object substitution features
 object_substitution_features = []
 for node_id, data in target_process_execution.nodes(data=True):
-    if node_id != "DB1":
-        continue
     if data["attr"].get("type", "") != "OBJECT":
         continue
 
@@ -321,19 +240,16 @@ for node_id, data in target_process_execution.nodes(data=True):
         for subst_id, subst_data in ocel_nx.nodes(data=True)
         if subst_data["attr"].get(ocel.object_type_column, "")
         == data["attr"].get(ocel.object_type_column, "")
-        and subst_data["attr"].get("capability", "") == data["attr"].get("capability", "")
+        and subst_data["attr"].get("capability", "")
+        == data["attr"].get("capability", "")
+        and subst_id != node_id
     ]
 
-    object_substitution_features.extend(
-        [
-            ObjectNodeSubstitution(
-                event_id=event_id,
-                object_id=node_id,
-                substitution_objects=substitution_objects,
-            )
-            for event_id, _, attr in target_process_execution.in_edges(node_id, data="attr")
-            if attr.get("type", "") == "E2O"
-        ]
+    object_substitution_features.append(
+        ObjectNodeSubstitution(
+            object_id=node_id,
+            substitution_objects=substitution_objects,
+        )
     )
 
 # Features for event node attributes
@@ -341,6 +257,7 @@ event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
+        value_original=attr[attr_name],
         value_range=selected_event_attributes[attr_name],
     )
     for node_id, attr in target_process_execution.nodes(data="attr")
@@ -355,36 +272,37 @@ for feature in available_features:
     print(feature)
 print(f"Total number of features: {len(available_features)}")
 
-# %% Run branch and bound algorithm to find counter factuals
-branch_and_bound = BranchAndBoundCounterFactual(
+# %% Run tree search algorithm to find counter factuals
+tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
-    max_changes=max_changes,
+    max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
 )
 
-branch_and_bound.enumerate(
-    Action(),
-    available_features,
+selected_actions = tree_search.search_layer(
+    [(Action(), available_features)],
     target_process_execution,
 )
-selected_actions = branch_and_bound.selected_actions
 
 # %% Display results
-print("Number of selected actions: ", len(selected_actions))
-for selected_action in selected_actions:
-    print("Objective value:", selected_action.objective_value())
-    print(
-        [
-            f"{feature}: {change_value}"
-            for feature, change_value in selected_action.node_attributes_modification.items()
-            if change_value != 0
-        ],
-        [
-            (feature.event_id, feature.object_id, subst[0])
-            for feature, subst in selected_action.object_substitution.items()
-            if subst and feature.object_id != subst[0]
-        ],
-    )
+if selected_actions:
+    print("Number of selected actions: ", len(selected_actions))
+    for selected_action in selected_actions:
+        print("Objective value:", selected_action.objective_value())
+        print(
+            [
+                f"{feature}: {change_value}"
+                for feature, change_value in selected_action.node_attributes_modification.items()
+                if change_value != 0
+            ],
+            [
+                (feature.event_id, feature.object_id, subst[0])
+                for feature, subst in selected_action.object_substitution.items()
+                if subst and feature.object_id != subst[0]
+            ],
+        )
+else:
+    print("No counterfactual actions found")
 
 # %%
 import networkx as nx
@@ -394,8 +312,8 @@ from process_execution.visualization import (
 )
 
 target_process_execution = trace_graphs["40217"]["process_execution"]
-apply_node_styles_nx(target_process_execution)  # apply coloring + tooltip
-apply_edge_styles_nx(target_process_execution)  # apply coloring + tooltip
+apply_node_styles_nx(target_process_execution)
+apply_edge_styles_nx(target_process_execution)
 
 # Draw process execution graph
 agraph = nx.nx_agraph.to_agraph(target_process_execution)

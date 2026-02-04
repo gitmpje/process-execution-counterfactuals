@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 from process_execution.process_execution import ProcessExecution
 
-from branch_and_bound.feature import (
+from tree_search.feature import (
     EventNodeDeletion,
     Feature,
     NodeAttributeNumeric,
@@ -142,28 +142,30 @@ class Action:
         return p
 
 
-class BranchAndBoundCounterFactual:
+class TreeSearchCounterFactual:
     """
-    Class implementing the Branch and Bound algorithm to find counterfactual actions.
+    Class implementing the tree search algorithm to find counterfactual actions.
     Attributes:
-        max_changes (int): Maximum number of allowed changes in the action.
-        counterfactual_label (bool): Desired outcome label for the counterfactual.
         process_outcome (callable): Function to determine the outcome of a process execution.
+        counterfactual_label (bool): Desired outcome label for the counterfactual.
+        step_change_size (int): Step size in the change size for each search layer.
+        max_change_size (int): Maximum change size to consider.
         log_level (int): Logging level for the process (default: logging.INFO).
     """
 
     def __init__(
         self,
         process_outcome: callable,
-        max_changes: int,
         counterfactual_label: bool,
+        step_change_size: int = 1,
+        max_change_size: int = 10,
         log_level=logging.INFO,
     ):
-        self.max_changes = max_changes
-        self.counterfactual_label = counterfactual_label
         self.process_outcome = process_outcome
+        self.counterfactual_label = counterfactual_label
+        self.step_change_size = step_change_size
+        self.max_change_size = max_change_size
         self.log_level = log_level
-        self.selected_actions = []
 
         self.count = 0
 
@@ -191,68 +193,94 @@ class BranchAndBoundCounterFactual:
         """
         n_actions = 1
         for feature in available_features:
-            n_actions *= feature.action_space_size()
+            n_actions *= max(feature.action_space_size(), 1)
 
         # TODO: incorporate limit on max_changes
         return n_actions
 
-    def enumerate(
-        self,
-        action: Action,
-        available_features: List[Feature],
-        process_execution: ProcessExecution,
-    ):
-        """
-        Recursively enumerate possible actions to find counterfactuals.
-        Args:
-            action (Action): The current action being evaluated.
-            available_features (List[Feature]): List of features that can still be modified.
-            process_execution (ProcessExecution): The original process execution.
-        """
-        self.logger.debug("%s", action)
-
-        # Check if there is no selected action with lower objective value
-        if any(
-            action.objective_value() >= selected_action.objective_value()
-            for selected_action in self.selected_actions
-        ):
-            return
-
+    def evaluate_action(self, action, process_execution):
         # Check process outcome after applying changes
         process_execution_c = action.apply_changes(deepcopy(process_execution))
         outcome_c = self.process_outcome(process_execution_c)
         self.logger.debug("Process outcome: %s", outcome_c)
-        if outcome_c == self.counterfactual_label:
-            print(process_execution_c.nodes(), outcome_c)
-            self.logger.info("Found counterfactual: %s", action)
-            self.selected_actions.append(deepcopy(action))
-            return
 
-        selected_feature = self.select_feature(available_features)
-        if not selected_feature:
-            return
+        return outcome_c == self.counterfactual_label
 
-        self.logger.debug("%s", selected_feature)
+    def explore_features(
+        self,
+        action: Action,
+        features: List[Feature],
+        process_execution: ProcessExecution,
+        change_size=1,
+    ):
+        change_lower = change_size - self.step_change_size
+        change_upper = change_size
 
-        for value in selected_feature.action_space(
-            action.get_change_value(selected_feature)
-        ):
-            action_prime = deepcopy(action)
-            action_prime.set_change_value(selected_feature, value)
+        explored_actions = []
+        selected_actions = []
+        for feature in features:
+            self.logger.debug("%s", feature)
 
-            # Check if action size does not exceed limit
-            if action_prime.action_size() > self.max_changes:
-                return
+            other_features = [f for f in features if f != feature]
+            for change_value in feature.action_space(change_lower, change_upper):
+                action_prime = deepcopy(action)
+                action_prime.set_change_value(feature, change_value)
 
-            self.enumerate(
-                action_prime,
-                available_features.copy(),
-                process_execution,
+                eval_result = self.evaluate_action(action_prime, process_execution)
+                if eval_result:
+                    self.logger.info("Found counterfactual: %s", action_prime)
+                    selected_actions.append(deepcopy(action_prime))
+
+                explored_actions.append((action_prime, other_features))
+
+                self.count += 1
+                if self.count % 50 == 0:
+                    self.logger.info(f"Evaluated {self.count} actions")
+
+        return explored_actions, selected_actions
+
+    def search_layer(
+        self,
+        actions_features: List[Tuple[Action, List[Feature]]],
+        process_execution: ProcessExecution,
+        change_size=1,
+    ):
+        """
+        Recursively enumerate possible actions to find counterfactuals.
+        Args:
+            actions_features (List[Tuple[Action, List[Feature]]]): Actions from preceding search step with list of features that can still be modified.
+            process_execution (ProcessExecution): The original process execution.
+            change_size: Change size to search actions for.
+        """
+        self.logger.debug("change_size=%s\n%s", change_size, actions_features)
+
+        # Terminate when max change size is reached
+        if change_size >= self.max_change_size:
+            self.logger.info(
+                f"No valid counterfactual action found with size smaller than {self.max_change_size}"
             )
+            return []
 
-            self.count += 1
-            if self.count % 50 == 0:
-                self.logger.info(f"Evaluated {self.count} actions")
+        explored_actions = []
+        selected_actions = []
+        for action, features in actions_features:
+            explored_actions_a, selected_actions_a = self.explore_features(action, features, process_execution, change_size)
+            explored_actions.extend(explored_actions_a)
+            selected_actions.extend(selected_actions_a)
+
+        # Return when valid counterfactual actions are found
+        if selected_actions:
+            return selected_actions
+
+        # If there are no actions explored, increase change size
+        if not explored_actions:
+            explored_actions = actions_features
+
+        self.search_layer(
+            actions_features,
+            process_execution,
+            change_size=change_size + self.step_change_size,
+        )
 
     def _configure_logger(self):
         logger = logging.getLogger(__name__)
