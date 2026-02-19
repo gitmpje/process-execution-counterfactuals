@@ -41,7 +41,7 @@ df_events_objects = df_events.join(df_relations, rsuffix="_relations")
 
 events_to_trace = df_events_objects[
     (df_events_objects[ocel.object_type_column].isin(target_object_types))
-].index.values
+].index.unique()
 
 print(f"Number of events selected: {len(events_to_trace)}")
 
@@ -52,17 +52,17 @@ def determine_class_quality(G: Graph, event: str):
 
 trace_graphs = {}
 for event in events_to_trace:
-    trace_graph = extract_process_execution(
+    process_execution = extract_process_execution(
         ocel_nx,
         event,
         ["ProductionLot", "PackingUnit"],
         "Object-creating_class_instance",
     )
-    trace_graph.construct_node_label()
-    trace_graph.construct_edge_label()
+    process_execution.construct_node_label()
+    process_execution.construct_edge_label()
 
     trace_graphs[event] = {
-        "process_execution": trace_graph,
+        "process_execution": process_execution,
         "class": determine_class_quality(ocel_nx, event),
     }
 
@@ -93,28 +93,36 @@ target_process_execution = trace_graphs[target_process_execution_id][
 
 # Object substitution features
 object_substitution_features = []
-for node_id, data in target_process_execution.nodes(data=True):
-    if data["attr"].get("type", "") != "OBJECT":
+for node_id, node_data in target_process_execution.nodes(data=True):
+    if node_data["attr"].get("type", "") != "OBJECT":
         continue
 
     # Only allow substitution of production resources
-    if data["attr"].get(ocel.object_type_column, "") != "ProductionResource":
+    if node_data["attr"].get(ocel.object_type_column, "") != "ProductionResource":
         continue
 
     substitution_objects = [
         (subst_id, subst_data)
         for subst_id, subst_data in ocel_nx.nodes(data=True)
         if subst_data["attr"].get(ocel.object_type_column, "")
-        == data["attr"].get(ocel.object_type_column, "")
+        == node_data["attr"].get(ocel.object_type_column, "")
         and subst_data["attr"].get("capability", "")
-        == data["attr"].get("capability", "")
+        == node_data["attr"].get("capability", "")
         and subst_id != node_id
     ]
 
     object_substitution_features.append(
         ObjectNodeSubstitution(
             object_id=node_id,
+            object_data=node_data,
             substitution_objects=substitution_objects,
+            event_ids=[
+                e
+                for e, _, attr in target_process_execution.in_edges(
+                    node_id, data="attr"
+                )
+                if attr["type"] == "E2O"
+            ],
         )
     )
 
@@ -154,19 +162,9 @@ selected_actions = tree_search.search_layer(
 )
 
 # %% Display results
-print("Number of selected actions:", end=" ")
-print(len(selected_actions))
+print(f"Number of selected actions: {len(selected_actions)}")
 
-for selected_action in selected_actions:
-    print(
-        [
-            f"{feature}: {change_value}"
-            for feature, change_value in selected_action.node_attributes_modification.items()
-            if change_value != 0
-        ],
-        [
-            (feature.event_id, feature.object_id, subst[0])
-            for feature, subst in selected_action.object_substitution.items()
-            if subst and feature.object_id != subst[0]
-        ],
-    )
+for selected_action in sorted(
+    selected_actions, key=lambda a: a.action_size(), reverse=True
+):
+    print(f"Change size {selected_action.action_size()}:", selected_action)

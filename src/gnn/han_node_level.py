@@ -3,8 +3,47 @@ import torch
 from numpy import inf
 from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
+from torch_geometric.loader import DataLoader
 from torch_geometric.nn import HANConv
 from typing import Dict, List, Tuple, Union
+
+
+class HAN(nn.Module):
+    def __init__(
+        self,
+        in_channels: Union[int, Dict[str, int]],
+        out_channels: int,
+        viewpoint: str,
+        metadata: Tuple[List[str], List[Tuple[str]]],
+        hidden_channels=128,
+        num_layers=1,
+        heads=8,
+        dropout=0.6,
+    ):
+        super().__init__()
+
+        self.viewpoint = viewpoint
+        self.metadata = metadata
+
+        self.han_convs = nn.ModuleList()
+        for _ in range(num_layers):
+            self.han_convs.append(
+                HANConv(
+                    in_channels,
+                    hidden_channels,
+                    heads=heads,
+                    dropout=dropout,
+                    metadata=self.metadata,
+                )
+            )
+        self.lin = nn.Linear(hidden_channels, out_channels)
+
+    def forward(self, x_dict, edge_index_dict):
+        for han_conv in self.han_convs:
+            x_dict = han_conv(x_dict, edge_index_dict)
+        out = self.lin(x_dict[self.viewpoint])
+
+        return out
 
 
 class HANConvTrainer:
@@ -30,10 +69,9 @@ class HANConvTrainer:
             self.model.parameters(), lr=learning_rate, weight_decay=0.001
         )
 
-        to_div = 0
-        train_loss = 0
+        total_loss = 0.0
+        total_count = 0
         for batch in data_loader:
-            # Move the batch to the appropriate device
             batch = batch.to(self.device)
 
             optimizer.zero_grad()
@@ -49,18 +87,18 @@ class HANConvTrainer:
             loss.backward()
             optimizer.step()
 
-            to_div += batch.batch_size
-            train_loss += loss
+            total_count += batch.batch_size
+            total_loss += total_count
 
-        return (train_loss / to_div).item()
+        return (total_loss / total_count).item()
 
     @torch.no_grad()
     def test(self, data_loader):
         self.model.to(self.device)  # Move the model to the GPU (or CPU)
-
-        to_div = 0
-        test_loss = 0
         self.model.eval()
+
+        total_loss = 0.0
+        total_count = 0
         for batch in data_loader:
             batch = batch.to(self.device)
 
@@ -72,10 +110,10 @@ class HANConvTrainer:
 
             loss = self.criterion(out, y_target)
 
-            test_loss += loss
-            to_div += batch.batch_size
+            total_loss += loss
+            total_count += batch.batch_size
 
-        return (test_loss / to_div).item()
+        return (total_loss / total_count).item()
 
     @torch.no_grad()
     def evaluate_acc(self, data_loader) -> float:
@@ -84,6 +122,7 @@ class HANConvTrainer:
         for batch in data_loader:
             batch = batch.to(self.device)
             out = self.model(batch.x_dict, batch.edge_index_dict)
+
             y_pred.extend(out.argmax(dim=-1).cpu().numpy().tolist())
             y_true.extend(batch.y_dict[self.viewpoint].view(-1).cpu().numpy().tolist())
 
@@ -122,17 +161,13 @@ class HANConvTrainer:
             total_abs_error += abs_error
             total_count += batch.batch_size  # total number of predictions
 
-        # Avoid division by zero
-        if total_count == 0:
-            return float("nan")
-
-        return total_abs_error / total_count
+        return total_abs_error / total_count if total_count > 0 else float("nan")
 
     def train(
         self,
-        train_loader,
-        val_loader,
-        test_loader,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        test_loader: DataLoader,
         n_epochs: int = 100,
         start_patience: int = 10,
         learning_rate: float = 0.005,
@@ -167,6 +202,7 @@ class HANConvTrainer:
                     f"for {start_patience} epochs"
                 )
                 break
+
         test_loss = self.test(test_loader)
         print(f"Final test Loss: {test_loss:.4f}")
         if self.output_type == "binary":
@@ -176,43 +212,6 @@ class HANConvTrainer:
         if self.output_type == "continuous":
             test_mae = self.evaluate_mae(test_loader)
             print("Final test MAE:", test_mae)
-
-
-class HAN(nn.Module):
-    def __init__(
-        self,
-        in_channels: Union[int, Dict[str, int]],
-        out_channels: int,
-        viewpoint: str,
-        metadata: Tuple[List[str], List[Tuple[str]]],
-        hidden_channels=128,
-        num_layers=1,
-        heads=8,
-    ):
-        super().__init__()
-
-        self.viewpoint = viewpoint
-        self.metadata = metadata
-
-        self.han_convs = nn.ModuleList()
-        for _ in range(num_layers):
-            self.han_convs.append(
-                HANConv(
-                    in_channels,
-                    hidden_channels,
-                    heads=heads,
-                    dropout=0.6,
-                    metadata=self.metadata,
-                )
-            )
-        self.lin = nn.Linear(hidden_channels, out_channels)
-
-    def forward(self, x_dict, edge_index_dict):
-        for han_conv in self.han_convs:
-            x_dict = han_conv(x_dict, edge_index_dict)
-        out = self.lin(x_dict[self.viewpoint])
-
-        return out
 
 
 class HANConvTrainerWithMasks(HANConvTrainer):
@@ -298,10 +297,13 @@ class HANConvTrainerWithMasks(HANConvTrainer):
         total_abs_error = 0.0
         total_count = 0
         for batch in data_loader:
+            # Move batch to device
             batch = batch.to(self.device)
 
+            # Forward pass
             out = self.model(batch.x_dict, batch.edge_index_dict)
 
+            # Extract target
             mask = getattr(batch[self.viewpoint], f"{mask_type}_mask")
             if mask.sum() > 0:
                 target = batch.y_dict[self.viewpoint][mask]
@@ -311,38 +313,41 @@ class HANConvTrainerWithMasks(HANConvTrainer):
 
         return total_abs_error / total_count if total_count > 0 else float("nan")
 
-    def train(self, data_loader):
-        min_score = inf
-        patience = self.start_patience
-        for epoch in range(1, 200):
-            train_loss = self.train_epoch(data_loader)
+    def train(
+        self,
+        data_loader: DataLoader,
+        n_epochs: int = 100,
+        start_patience: int = 10,
+        learning_rate: float = 0.005,
+    ):
+        min_loss = inf
+        patience = start_patience
+        for epoch in range(n_epochs):
+            train_loss = self.train_epoch(data_loader, learning_rate)
             val_loss = self.test(data_loader, mask_type="val")
 
             val_acc, val_f1 = None, None
             if self.output_type == "binary":
                 val_acc, val_f1 = self.evaluate_acc(data_loader, mask_type="val")
-                eval_score = val_acc
-            else:
-                eval_score = val_loss
 
-            if epoch % 5 == 0 or epoch == 1:
+            if epoch % 5 == 0:
                 val_f1_str = (
                     f", val_acc={val_acc:.4f}, val_f1={val_f1:.4f}" if val_acc else ""
                 )
                 print(
-                    f"Epoch: {epoch:03d}, loss: {train_loss:.4f}, {val_loss:.4f}{val_f1_str}"
+                    f"Epoch: {epoch:03d}, Loss: {train_loss:.4f}, {val_loss:.4f}{val_f1_str}"
                 )
 
-            if eval_score < min_score:
-                min_score = eval_score
-                patience = self.start_patience
+            if val_loss < min_loss:
+                min_loss = val_loss
+                patience = start_patience
             else:
                 patience -= 1
 
             if patience <= 0:
                 print(
-                    "Stopping training as validation score did not improve "
-                    f"for {self.start_patience} epochs"
+                    "Stopping training as validation Loss did not improve "
+                    f"for {start_patience} epochs"
                 )
                 break
 

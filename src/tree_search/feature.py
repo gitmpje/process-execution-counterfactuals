@@ -1,9 +1,11 @@
 from itertools import combinations
 from math import comb
+from networkx import NetworkXError
 
 from typing import Any, Iterable, List, Optional, Tuple
 
 from process_execution.process_execution import ProcessExecution
+from process_execution.similarity import attribute_similarity, node_subst_cost
 
 
 class Feature:
@@ -49,22 +51,26 @@ class NodeAttributeNumeric(Feature):
 
     def action_space(
         self,
-        change_lower: int | float | complex = 1,
-        change_upper: int | float | complex = 1,
+        current_change_value: int | float | complex = 0,
+        max_change_size_delta: int | float | complex = 1,
     ) -> Iterable[int | float | complex]:
         """
         Generate possible values for the node attribute feature.
         Args:
-            change_lower (int | float | complex): Lower bound of the change value.
-            change_upper (int | float | complex): Upper bound of the change value.
+            current_change_value (Optional[List[str]]): Current change value.
+            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
         Yields:
             Iterable[int | float | complex]: Possible values for the attribute.
         """
+        change_lower = (
+            self.change_size(current_change_value) if current_change_value else 0
+        )
+        change_upper = change_lower + max_change_size_delta
 
-        # TODO: improve calculation of the size of the change
-        for v in self.value_range:
-            if v >= change_lower and v < change_upper:
-                yield v
+        for value in self.value_range:
+            change_size = self.change_size(value)
+            if change_size > change_lower and change_size <= change_upper:
+                yield value
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
         """
@@ -77,6 +83,11 @@ class NodeAttributeNumeric(Feature):
         """
         p.nodes()[self.node_id]["attr"][self.attribute_name] += delta_value
         return p
+
+    def change_size(self, value=None):
+        return 1 - attribute_similarity(
+            self.value_original, self.value_original + value
+        )
 
 
 class ObjectNodeSubstitution(Feature):
@@ -96,28 +107,32 @@ class ObjectNodeSubstitution(Feature):
         *args,
         object_id: str,
         substitution_objects: List[Tuple[str, dict]],
-        event_id: Optional[str] = None,
+        event_ids: List[str],
+        object_data: dict = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.object_id = object_id
         self.substitution_objects = substitution_objects
-        self.event_id = event_id
+        self.event_ids = event_ids
+        self.object_data = object_data if object_data else {}
 
     def __repr__(self) -> str:
-        return f"Event {self.event_id} - object {self.object_id} with {len(self.substitution_objects)} substitution options (action space size {self.action_space_size()})"
+        return f"Event(s) {self.event_ids} - object {self.object_id} with {len(self.substitution_objects)} substitution options"
 
     def action_space_size(self):
         return len(self.substitution_objects)
 
     def action_space(
-        self, change_lower: int = 1, change_upper: int = 1
+        self,
+        current_change_value: Tuple[str, dict] = None,
+        max_change_size_delta: int | float | complex = 1,
     ) -> Iterable[Tuple[str, dict]]:
         """
         Generate possible substitution options for the object node feature.
         Args:
-            change_lower (int | float | complex): Lower bound of the change value.
-            change_upper (int | float | complex): Upper bound of the change value.
+            current_change_value (Optional[List[str]]): Current change value.
+            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
         Yields:
             Iterable[Tuple[str, dict]]: substitution object.
         """
@@ -142,7 +157,7 @@ class ObjectNodeSubstitution(Feature):
         remove_edges = []
         add_edges = []
         for u, v, d in p.in_edges(self.object_id, data=True):
-            if u == self.event_id or not self.event_id:
+            if u in self.event_ids:
                 remove_edges.append((u, v))
                 add_edges.append((u, subst_object_id, d))
         p.remove_edges_from(remove_edges)
@@ -154,9 +169,16 @@ class ObjectNodeSubstitution(Feature):
             for u, v, attr in p.in_edges(self.object_id, data="attr")
             if attr["type"] == "E2O"
         ):
-            p.remove_node(self.object_id)
+            try:
+                p.remove_node(self.object_id)
+            except NetworkXError:
+                print(f"{self.object_id} does not exist in the graph.")
 
         return p
+
+    def change_size(self, subst_node: Tuple[str, dict] = None):
+        subst_node_data = subst_node[1]
+        return node_subst_cost(self.object_data, subst_node_data)
 
 
 class EventNodeDeletion(Feature):
@@ -198,26 +220,50 @@ class EventNodeDeletion(Feature):
             return size
 
     def action_space(
-        self, change_lower: int = 1, change_upper: int = 1
+        self,
+        current_change_value: Optional[List[str]] = None,
+        max_change_size_delta: int | float | complex = 1,
     ) -> Iterable[List[str]]:
         """
         Generate possible deletion options for the object node feature.
         Args:
-            change_lower (int | float | complex): Lower bound of the change value.
-            change_upper (int | float | complex): Upper bound of the change value.
+            current_change_value (Optional[List[str]]): Current change value.
+            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
         Yields:
             Iterable[List[str]]: Possible deletion options.
         """
+        change_lower = (
+            self.change_size(current_change_value) if current_change_value else 0
+        )
+        change_upper = change_lower + max_change_size_delta
 
         if self.deletion_options:
             for option in self.deletion_options:
-                if len(option) >= change_lower and len(option) < change_upper:
+                if (
+                    self.change_size(option) > change_lower
+                    and self.change_size(option) <= change_upper
+                ):
                     yield option
         else:
             for r in range(len(self.allowed_deletions) + 1):
                 for c in combinations(self.allowed_deletions, r):
-                    if len(c) >= change_lower and len(c) < change_upper:
+                    if self.change_size(c) > change_upper:
+                        break
+
+                    # Only return set of nodes to delete that extends the current set
+                    overlap = True
+                    # if current_change_value:
+                    #     print(c[:len(current_change_value)])
+                    #     overlap = c[:len(current_change_value)] == current_change_value
+
+                    if overlap and self.change_size(c) > change_lower:
                         yield c
+
+    def change_size(self, value=None):
+        if value:
+            return len(value)
+        else:
+            return 0
 
     def apply_change(
         self,
@@ -229,7 +275,7 @@ class EventNodeDeletion(Feature):
             edges = []
             target_df_events = [
                 v
-                for u, v, d in p.out_edges(deletion_node_id, data=True)
+                for _, v, d in p.out_edges(deletion_node_id, data=True)
                 if d["attr"]["type"] == "DF"
             ]
             for u, _, d in p.in_edges(deletion_node_id, data=True):

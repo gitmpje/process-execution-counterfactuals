@@ -1,6 +1,6 @@
 import logging
 
-from copy import deepcopy
+from copy import copy, deepcopy
 from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Tuple
 
@@ -12,6 +12,14 @@ from tree_search.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
+
+
+def has_value(gen):
+    try:
+        next(gen)
+        return True
+    except StopIteration:
+        return False
 
 
 class Action:
@@ -38,12 +46,27 @@ class Action:
         )
 
     def __repr__(self):
+        object_substitution = {k: v[0] for k, v in self.object_substitution.items()}
+
         return f"""Action<{id(self)}>
     event_deletion: {self.event_deletion}
-    object_substitution: {self.object_substitution}
+    object_substitution: {object_substitution}
     node_attributes_modification: {self.node_attributes_modification}"""
 
-    def get_change_value(self, feature: Feature) -> Any:
+    def __copy__(self):
+        """
+        Make a shallow copy of this object.
+        """
+        new_obj = type(self)(
+            event_deletion={k: v for k, v in self.event_deletion.items()},
+            object_substitution={k: v for k, v in self.object_substitution.items()},
+            node_attributes_modification={
+                k: v for k, v in self.node_attributes_modification.items()
+            },
+        )
+        return new_obj
+
+    def get_change_value(self, feature: Feature) -> Any | None:
         """
         Get the current change value for a given feature.
         Args:
@@ -52,9 +75,9 @@ class Action:
             Any: The current change value for the feature.
         """
         if isinstance(feature, EventNodeDeletion):
-            return self.event_deletion.get(feature, [])
+            return self.event_deletion.get(feature)
         elif isinstance(feature, NodeAttributeNumeric):
-            return self.node_attributes_modification.get(feature, 0)
+            return self.node_attributes_modification.get(feature)
         elif isinstance(feature, ObjectNodeSubstitution):
             return self.object_substitution.get(feature)
         else:
@@ -82,21 +105,20 @@ class Action:
         Returns:
             int: The total number of changes.
         """
-        substitutions = [
-            (k.object_id, v[0]) for k, v in self.object_substitution.items() if v
-        ]
-
-        return (
-            len(self.event_deletion)
-            + len(
-                [
-                    obj_id
-                    for obj_id, subst_obj_id in substitutions
-                    if obj_id != subst_obj_id
-                ]
-            )
-            + len([k for k, v in self.node_attributes_modification.items() if v != 0])
+        deletion_size = sum(
+            feature.change_size(del_node) for feature, del_node in self.event_deletion.items()
         )
+
+        substitution_size = sum(
+            feature.change_size(subst_obj)
+            for feature, subst_obj in self.object_substitution.items()
+        )
+
+        node_attributes_modification_size = sum(
+            feature.change_size(change_value)
+            for feature, change_value in self.node_attributes_modification.items()
+        )
+        return deletion_size + substitution_size + node_attributes_modification_size
 
     def objective_value(self) -> int:
         """
@@ -132,9 +154,13 @@ class Action:
             ProcessExecution: The modified process execution after applying the changes.
         """
 
-        for substitution, value in self.object_substitution.items():
-            if value:
-                substitution.apply_change(p, value)
+        for feature, deletion in self.event_deletion.items():
+            if deletion:
+                feature.apply_change(p, deletion)
+
+        for feature, substitution in self.object_substitution.items():
+            if substitution:
+                feature.apply_change(p, substitution)
 
         for feature, value in self.node_attributes_modification.items():
             feature.apply_change(p, value)
@@ -160,14 +186,14 @@ class TreeSearchCounterFactual:
         step_change_size: int = 1,
         max_change_size: int = 10,
         log_level=logging.INFO,
+        log_file: str = f"{__name__}.log",
     ):
         self.process_outcome = process_outcome
         self.counterfactual_label = counterfactual_label
         self.step_change_size = step_change_size
         self.max_change_size = max_change_size
         self.log_level = log_level
-
-        self.count = 0
+        self.log_file = log_file
 
         self.logger = self._configure_logger()
 
@@ -202,7 +228,6 @@ class TreeSearchCounterFactual:
         # Check process outcome after applying changes
         process_execution_c = action.apply_changes(deepcopy(process_execution))
         outcome_c = self.process_outcome(process_execution_c)
-        self.logger.debug("Process outcome: %s", outcome_c)
 
         return outcome_c == self.counterfactual_label
 
@@ -213,31 +238,44 @@ class TreeSearchCounterFactual:
         process_execution: ProcessExecution,
         change_size=1,
     ):
-        change_lower = change_size - self.step_change_size
-        change_upper = change_size
+        max_change_size_delta = change_size - action.action_size()
 
-        explored_actions = []
+        next_actions = []
         selected_actions = []
+        features_no_change = []
         for feature in features:
-            self.logger.debug("%s", feature)
+            current_change_value = action.get_change_value(feature)
 
-            other_features = [f for f in features if f != feature]
-            for change_value in feature.action_space(change_lower, change_upper):
-                action_prime = deepcopy(action)
+            next_features = {f for f in features if f != feature}
+            explored_feature = False
+            for change_value in feature.action_space(
+                current_change_value, max_change_size_delta
+            ):
+                explored_feature = True
+                action_prime = copy(action)
                 action_prime.set_change_value(feature, change_value)
 
                 eval_result = self.evaluate_action(action_prime, process_execution)
                 if eval_result:
                     self.logger.info("Found counterfactual: %s", action_prime)
-                    selected_actions.append(deepcopy(action_prime))
+                    selected_actions.append(copy(action_prime))
 
-                explored_actions.append((action_prime, other_features))
+                # If feature actions space is not empty after selected change value
+                if has_value(feature.action_space(change_value, self.max_change_size)):
+                    next_features.add(feature)
 
-                self.count += 1
-                if self.count % 50 == 0:
-                    self.logger.info(f"Evaluated {self.count} actions")
+                next_actions.append((action_prime, next_features))
 
-        return explored_actions, selected_actions
+            if not explored_feature:
+                features_no_change.append(feature)
+
+        self.logger.debug("Explored %s actions", len(next_actions))
+
+        # Take action to next layer with 'unexplored' features
+        if features_no_change:
+            next_actions.append((action, features_no_change))
+
+        return next_actions, selected_actions
 
     def search_layer(
         self,
@@ -252,32 +290,40 @@ class TreeSearchCounterFactual:
             process_execution (ProcessExecution): The original process execution.
             change_size: Change size to search actions for.
         """
-        self.logger.debug("change_size=%s\n%s", change_size, actions_features)
 
         # Terminate when max change size is reached
-        if change_size >= self.max_change_size:
+        if change_size > self.max_change_size:
             self.logger.info(
                 f"No valid counterfactual action found with size smaller than {self.max_change_size}"
             )
             return []
 
-        explored_actions = []
+        next_actions_features = []
         selected_actions = []
         for action, features in actions_features:
-            explored_actions_a, selected_actions_a = self.explore_features(action, features, process_execution, change_size)
-            explored_actions.extend(explored_actions_a)
-            selected_actions.extend(selected_actions_a)
+            explored, selected = self.explore_features(
+                action, features, process_execution, change_size
+            )
+            next_actions_features.extend(explored)
+            selected_actions.extend(selected)
+
+        self.logger.info(
+            "Explored %s actions for change_size %s",
+            len(next_actions_features),
+            change_size,
+        )
+
+        if self.log_level == logging.DEBUG:
+            with open(f"{self.log_file}-explored_actions-{change_size}", "w") as f:
+                f.write("\n".join([f"{item[0]}" for item in next_actions_features]))
 
         # Return when valid counterfactual actions are found
         if selected_actions:
             return selected_actions
 
-        # If there are no actions explored, increase change size
-        if not explored_actions:
-            explored_actions = actions_features
-
-        self.search_layer(
-            actions_features,
+        # Start next search layer
+        return self.search_layer(
+            next_actions_features,
             process_execution,
             change_size=change_size + self.step_change_size,
         )
@@ -298,7 +344,7 @@ class TreeSearchCounterFactual:
         logger.addHandler(stream_handler)
 
         # Handler to output logs to a file
-        file_handler = RotatingFileHandler(f"{__name__}.log")
+        file_handler = RotatingFileHandler(self.log_file)
         file_handler.setFormatter(formatter)
         file_handler.setLevel(self.log_level)
         logger.addHandler(file_handler)

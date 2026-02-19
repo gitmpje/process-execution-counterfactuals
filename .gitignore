@@ -11,4 +11,4 @@ wheels/
 .venv
 
 # Log files
-*.log
+*.log*
