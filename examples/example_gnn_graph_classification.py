@@ -10,7 +10,6 @@ import numpy as np
 
 from collections import Counter
 from networkx import Graph
-from numpy import arange
 
 from torch_geometric.explain import (
     Explainer,
@@ -18,9 +17,10 @@ from torch_geometric.explain import (
     HeteroExplanation,
 )
 
-from tree_search.feature import (
-    NodeAttributeNumeric,
-    ObjectNodeSubstitution,
+from tree_search.feature_helpers import (
+    build_object_substitution_features,
+    build_event_deletion_features,
+    build_node_attribute_numeric,
 )
 from tree_search.feature_selection import (
     get_nodes_by_importance,
@@ -221,10 +221,9 @@ def process_outcome(p: ProcessExecution) -> bool:
 # Select process execution to generate counterfactual for
 target_process_execution_id = "14602"
 
-selected_attributes = {
-    "process_yield": arange(0, 1.01, 0.5),
-    # "averageQuality": arange(0, 1.01, 0.5),
-    "quantity": range(0, 1001, 500),
+discretized_event_attributes = {
+    "process_yield": (0.5, 1.01),
+    "quantity": (500, 1001),
 }
 max_change_size = 10
 counter_factual_label = not process_executions[target_process_execution_id]["class"]
@@ -251,73 +250,51 @@ attr_ordered = {
 }
 
 # Features for object node attributes
-nodes_attr = target_process_execution.nodes(data="attr")
-object_node_attributes = [
-    NodeAttributeNumeric(
-        node_id=node_id,
-        attribute_name=attr_name,
-        value_original=nodes_attr[node_id][attr_name],
-        value_range=selected_attributes[attr_name],
-        num_node_attrs=len(nodes_attr[node_id]),
-    )
-    for node_id in nodes_ordered
-    if nodes_attr[node_id].get("type", "") == "OBJECT"
-    for attr_name in attr_ordered.get(nodes_attr[node_id][ocel.object_type_column], [])
-    if attr_name in selected_attributes and nodes_attr[node_id].get(attr_name)
-]
+object_node_attributes = build_node_attribute_numeric(
+    target_nodes=target_process_execution.nodes(data=True),
+    selected_event_attributes=discretized_event_attributes,
+    node_type="OBJECT",
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
+    object_type_column=ocel.object_type_column,
+)
 
-# Features for event node attributes
-event_node_attributes = [
-    NodeAttributeNumeric(
-        node_id=node_id,
-        attribute_name=attr_name,
-        value_original=nodes_attr[node_id][attr_name],
-        value_range=selected_attributes[attr_name],
-        num_node_attrs=len(nodes_attr[node_id]),
-    )
-    for node_id in nodes_ordered
-    if nodes_attr[node_id].get("type", "") == "EVENT"
-    for attr_name in attr_ordered.get("EVENT", [])
-    if attr_name in selected_attributes and nodes_attr[node_id].get(attr_name)
-]
 
 # Object substitution features
-object_substitution_features = []
-for node_id in nodes_ordered:
-    node_data = target_process_execution.nodes(data=True)[node_id]
-    if node_data["attr"].get("type", "") != "OBJECT":
-        continue
+def _check_capability(node_attr, subst_attr):
+    return node_attr.get("capability", "") == subst_attr.get("capability", "")
 
-    # Only allow substitution of specific object types
-    if node_data["attr"].get(ocel.object_type_column, "") not in ["ProductionResource"]:
-        continue
 
-    # Select substition resources based on object type and capability
-    substitution_objects = [
-        (subst_id, subst_data)
-        for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get(ocel.object_type_column, "")
-        == node_data["attr"].get(ocel.object_type_column, "")
-        and subst_data["attr"].get("capability", "")
-        == node_data["attr"].get("capability", "")
-        and subst_id != node_id
-    ]
+node_data = target_process_execution.nodes(data=True)
+target_nodes_for_subst = (
+    (n, node_data[n])
+    for n in nodes_ordered
+    if node_data[n].get("attr", {}).get(ocel.object_type_column, "")
+    == "ProductionResource"
+)
 
-    object_substitution_features.append(
-        ObjectNodeSubstitution(
-            object_id=node_id,
-            object_data=node_data,
-            substitution_objects=substitution_objects,
-            event_ids=[
-                e
-                for e, _, attr in target_process_execution.in_edges(
-                    node_id, data="attr"
-                )
-                if attr["type"] == "E2O"
-            ],
-        )
-    )
+object_substitution_features = build_object_substitution_features(
+    target_nodes=target_nodes_for_subst,
+    ocel_nodes=ocel_nx.nodes(data=True),
+    graph=target_process_execution,
+    check=_check_capability,
+    object_type_column=ocel.object_type_column,
+    discretized_event_attributes=discretized_event_attributes,
+)
 
+# Features for event node attributes
+event_node_attributes = build_node_attribute_numeric(
+    target_nodes=target_process_execution.nodes(data=True),
+    selected_event_attributes=discretized_event_attributes,
+    node_type="EVENT",
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
+)
+
+# Events that can be deleted
+event_deletion_features = build_event_deletion_features(
+    target_process_execution.nodes(data=True)
+)
 
 available_features = (
     object_node_attributes + event_node_attributes + object_substitution_features
@@ -332,7 +309,7 @@ tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
     max_change_size=max_change_size,
     counterfactual_label=counter_factual_label,
-    log_file="log/example_gnn_graph_classification.log",
+    log_file="logs/example_gnn_graph_classification.log",
 )
 
 selected_actions = tree_search.search_layer(
@@ -341,17 +318,17 @@ selected_actions = tree_search.search_layer(
 )
 
 # %% Run tree search algorithm in parallel
-tree_search_parallel = TreeSearchCounterFactualParallel(
-    process_outcome=process_outcome,
-    max_changes=max_change_size,
-    counterfactual_label=counter_factual_label,
-    num_workers=5,
-)
+# tree_search_parallel = TreeSearchCounterFactualParallel(
+#     process_outcome=process_outcome,
+#     max_change_size=max_change_size,
+#     counterfactual_label=counter_factual_label,
+#     num_workers=5,
+# )
 
-selected_actions = tree_search_parallel.find_counterfactuals(
-    available_features,
-    target_process_execution,
-)
+# selected_actions = tree_search_parallel.find_counterfactuals(
+#     available_features,
+#     target_process_execution,
+# )
 
 # %% Display results
 print(f"Number of selected actions: {len(selected_actions)}")

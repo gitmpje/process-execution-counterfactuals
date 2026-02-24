@@ -227,10 +227,9 @@ def construct_graph_dict_multiple_viewpoint_nodes(
             if node_type not in node_num_keys.keys():
                 continue
 
+            # Construct x
             node_feats = [float(attr.get(k, 0.0)) for k in node_num_keys[node_type][t]]
-            if not node_feats:
-                node_feats = [float(0.0)]
-            feat_values.append(node_feats)
+
             feat_labels = node_num_keys[node_type][t].copy()
             node_labels.append(n)
 
@@ -241,6 +240,12 @@ def construct_graph_dict_multiple_viewpoint_nodes(
                 node_feats.extend(activity_feats)
                 feat_labels.extend(activities)
 
+            if not node_feats:
+                node_feats = [float(0.0)]
+
+            feat_values.append(node_feats)
+
+            # Construct y
             if t == viewpoint:
                 graph_dict["y_nodes"].append(n)
                 if node_y_mapping:
@@ -248,7 +253,6 @@ def construct_graph_dict_multiple_viewpoint_nodes(
                     if y is not None:
                         graph_dict["y"].append(y)
                     else:
-                        print(f"No y value found for node {n}")
                         graph_dict["y"].append(np.nan)
 
         graph_dict[t] = feat_values

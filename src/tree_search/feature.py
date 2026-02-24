@@ -1,11 +1,21 @@
 from itertools import combinations
 from math import comb
 from networkx import NetworkXError
+from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_TYPE
 
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from process_execution.process_execution import ProcessExecution
-from process_execution.similarity import attribute_similarity, node_subst_cost
+from process_execution.comparison import (
+    attribute_diff_numeric,
+    node_subst_cost,
+)
+
+TYPE_ATTRIBUTES = [
+    "type",  # EVENT/OBJECT
+    DEFAULT_EVENT_ACTIVITY,
+    DEFAULT_OBJECT_TYPE,
+]
 
 
 class Feature:
@@ -34,20 +44,22 @@ class NodeAttributeNumeric(Feature):
         node_id: str,
         attribute_name: str,
         value_original: int | float | complex,
-        value_range: Iterable[int | float | complex],
+        value_step: int | float,
+        value_max: int | float,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.node_id = node_id
-        self.value_original = value_original
         self.attribute_name = attribute_name
-        self.value_range = value_range
+        self.value_original = value_original
+        self.value_step = value_step
+        self.value_max = value_max
 
     def __repr__(self) -> str:
-        return f"{self.node_id} - {self.attribute_name} {self.value_range} (action space size {self.action_space_size()})"
+        return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
 
     def action_space_size(self):
-        return len(self.value_range)
+        return (self.value_max - self.value_original) / self.value_step
 
     def action_space(
         self,
@@ -62,15 +74,17 @@ class NodeAttributeNumeric(Feature):
         Yields:
             Iterable[int | float | complex]: Possible values for the attribute.
         """
-        change_lower = (
-            self.change_size(current_change_value) if current_change_value else 0
-        )
-        change_upper = change_lower + max_change_size_delta
 
-        for value in self.value_range:
-            change_size = self.change_size(value)
-            if change_size > change_lower and change_size <= change_upper:
-                yield value
+        change_value = current_change_value if current_change_value else 0
+        current_change_size = self.change_size(change_value)
+
+        while change_value + self.value_step < self.value_max:
+            change_value += self.value_step
+            if (
+                self.change_size(change_value) - current_change_size
+                <= max_change_size_delta
+            ):
+                yield change_value
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
         """
@@ -84,9 +98,11 @@ class NodeAttributeNumeric(Feature):
         p.nodes()[self.node_id]["attr"][self.attribute_name] += delta_value
         return p
 
-    def change_size(self, value=None):
-        return 1 - attribute_similarity(
-            self.value_original, self.value_original + value
+    def change_size(self, change_value=0):
+        return attribute_diff_numeric(
+            self.value_original,
+            self.value_original + change_value,
+            interval_size=self.value_step,
         )
 
 
@@ -109,6 +125,7 @@ class ObjectNodeSubstitution(Feature):
         substitution_objects: List[Tuple[str, dict]],
         event_ids: List[str],
         object_data: dict = None,
+        discretized_event_attributes: Dict[str, Any] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -116,6 +133,7 @@ class ObjectNodeSubstitution(Feature):
         self.substitution_objects = substitution_objects
         self.event_ids = event_ids
         self.object_data = object_data if object_data else {}
+        self.discretized_event_attributes = discretized_event_attributes
 
     def __repr__(self) -> str:
         return f"Event(s) {self.event_ids} - object {self.object_id} with {len(self.substitution_objects)} substitution options"
@@ -137,9 +155,9 @@ class ObjectNodeSubstitution(Feature):
             Iterable[Tuple[str, dict]]: substitution object.
         """
 
-        # TODO: implement change size check
-        for obj in self.substitution_objects:
-            yield obj
+        for subst_node in self.substitution_objects:
+            if self.change_size(subst_node=subst_node) <= max_change_size_delta:
+                yield subst_node
 
     def apply_change(
         self,
@@ -177,8 +195,14 @@ class ObjectNodeSubstitution(Feature):
         return p
 
     def change_size(self, subst_node: Tuple[str, dict] = None):
-        subst_node_data = subst_node[1]
-        return node_subst_cost(self.object_data, subst_node_data)
+        subst_node_data = subst_node[1] if subst_node else {}
+        return node_subst_cost(
+            self.object_data,
+            subst_node_data,
+            exclude_attributes=TYPE_ATTRIBUTES,
+            aggregation_type="sum",
+            discretized_event_attributes=self.discretized_event_attributes,
+        )
 
 
 class EventNodeDeletion(Feature):
@@ -259,9 +283,9 @@ class EventNodeDeletion(Feature):
                     if overlap and self.change_size(c) > change_lower:
                         yield c
 
-    def change_size(self, value=None):
-        if value:
-            return len(value)
+    def change_size(self, del_nodes=None):
+        if del_nodes:
+            return len(del_nodes)
         else:
             return 0
 

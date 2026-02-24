@@ -10,7 +10,6 @@ class Metadata:
     node_types: List[str]
     edge_types: List[str]
     feat_label_dict: Dict[str, List[str]]
-    node_label_dict: Dict[str, List[str]]
 
 
     def to_dict(self) -> Dict[str, Any]:
@@ -21,7 +20,6 @@ class Metadata:
             "node_types": self.node_types,
             "edge_types": self.edge_types,
             "feat_label_dict": self.feat_label_dict,
-            "node_label_dict": self.node_label_dict,
         }
 
     @classmethod
@@ -37,5 +35,4 @@ class Metadata:
             node_types=metadata_dict.get("node_types"),
             edge_types=metadata_dict.get("edge_types"),
             feat_label_dict=metadata_dict.get("feat_label_dict"),
-            node_label_dict=metadata_dict.get("node_label_dict"),
         )

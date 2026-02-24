@@ -4,11 +4,10 @@ import pm4py
 
 from collections import Counter
 from networkx import Graph
-from numpy import arange
 
-from tree_search.feature import (
-    NodeAttributeNumeric,
-    ObjectNodeSubstitution,
+from tree_search.feature_helpers import (
+    build_object_substitution_features,
+    build_node_attribute_numeric,
 )
 from tree_search.tree_search import Action, TreeSearchCounterFactual
 from process_execution.process_execution import (
@@ -73,9 +72,9 @@ print("Classes:", Counter([d["class"] for d in trace_graphs.values()]))
 # Select process execution to generate counterfactual for
 target_process_execution_id = "198"
 
-selected_event_attributes = {
-    "temperature": arange(0, 1.01, 0.5),
-    "quantity": range(0, 1001, 500),
+discretized_event_attributes = {
+    "temperature": (0.5, 1.01),
+    "quantity": (500, 1001),
 }
 max_change_size = 10
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
@@ -91,54 +90,33 @@ target_process_execution = trace_graphs[target_process_execution_id][
     "process_execution"
 ]
 
+
 # Object substitution features
-object_substitution_features = []
-for node_id, node_data in target_process_execution.nodes(data=True):
-    if node_data["attr"].get("type", "") != "OBJECT":
-        continue
+def _check_capability(node_attr, subst_attr):
+    return node_attr.get("capability", "") == subst_attr.get("capability", "")
 
-    # Only allow substitution of production resources
-    if node_data["attr"].get(ocel.object_type_column, "") != "ProductionResource":
-        continue
 
-    substitution_objects = [
-        (subst_id, subst_data)
-        for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get(ocel.object_type_column, "")
-        == node_data["attr"].get(ocel.object_type_column, "")
-        and subst_data["attr"].get("capability", "")
-        == node_data["attr"].get("capability", "")
-        and subst_id != node_id
-    ]
+target_nodes_for_subst = (
+    (n, d)
+    for n, d in target_process_execution.nodes(data=True)
+    if d.get("attr", {}).get(ocel.object_type_column, "") == "ProductionResource"
+)
 
-    object_substitution_features.append(
-        ObjectNodeSubstitution(
-            object_id=node_id,
-            object_data=node_data,
-            substitution_objects=substitution_objects,
-            event_ids=[
-                e
-                for e, _, attr in target_process_execution.in_edges(
-                    node_id, data="attr"
-                )
-                if attr["type"] == "E2O"
-            ],
-        )
-    )
+object_substitution_features = build_object_substitution_features(
+    target_nodes=target_nodes_for_subst,
+    ocel_nodes=ocel_nx.nodes(data=True),
+    graph=target_process_execution,
+    check=_check_capability,
+    object_type_column=ocel.object_type_column,
+    discretized_event_attributes=discretized_event_attributes,
+)
 
 # Features for event node attributes
-event_node_attributes = [
-    NodeAttributeNumeric(
-        node_id=node_id,
-        attribute_name=attr_name,
-        value_original=attr[attr_name],
-        value_range=selected_event_attributes[attr_name],
-    )
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "EVENT"
-    for attr_name in attr.keys()
-    if attr_name in selected_event_attributes
-]
+event_node_attributes = build_node_attribute_numeric(
+    target_nodes=target_process_execution.nodes(data=True),
+    selected_event_attributes=discretized_event_attributes,
+    node_type="EVENT",
+)
 
 available_features = object_substitution_features + event_node_attributes
 for feature in available_features:

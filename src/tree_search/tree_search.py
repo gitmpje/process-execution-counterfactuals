@@ -106,16 +106,16 @@ class Action:
             int: The total number of changes.
         """
         deletion_size = sum(
-            feature.change_size(del_node) for feature, del_node in self.event_deletion.items()
+            feature.change_size(del_nodes=del_nodes) for feature, del_nodes in self.event_deletion.items()
         )
 
         substitution_size = sum(
-            feature.change_size(subst_obj)
+            feature.change_size(subst_node=subst_obj)
             for feature, subst_obj in self.object_substitution.items()
         )
 
         node_attributes_modification_size = sum(
-            feature.change_size(change_value)
+            feature.change_size(change_value=change_value)
             for feature, change_value in self.node_attributes_modification.items()
         )
         return deletion_size + substitution_size + node_attributes_modification_size
