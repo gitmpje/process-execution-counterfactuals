@@ -183,7 +183,7 @@ if PROCESS_EXECUTION_LEVEL:
             float: The predicted value.
         """
         graph_map = {"_tmp": {"process_execution": p, y_key: np.nan}}
-        dataset, _, _ = build_hetero_dataset(
+        dataset, _, _, _, _ = build_hetero_dataset(
             graph_map,
             node_num_keys,
             ocel.object_type_column,

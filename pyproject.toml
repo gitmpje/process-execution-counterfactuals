@@ -5,12 +5,13 @@ description = "Research project on generating counterfactuals for process execut
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-  "pm4py ==2.7.*",
   "graphviz ==0.21",
-  "pygraphviz ==1.14",
-  "networkx ==3.6.*",
-  "pydot ==4.0.*",
   "ipykernel ==7.*",
+  "networkx ==3.6.*",
+  "pm4py ==2.7.*",
+  "pydot ==4.0.*",
+  "pygraphviz ==1.14",
+  "scikit-learn==1.8.*",
   "torch ==2.9.*",
   "torch_geometric ==2.7.*",
 ]

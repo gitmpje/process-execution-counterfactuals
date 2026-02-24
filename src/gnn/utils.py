@@ -1,14 +1,17 @@
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 
 @dataclass
 class Metadata:
-    viewpoint: Any
-    node_num_keys: Any
-    activities: Any
-    node_types: Any
-    edge_types: Any
+    viewpoint: str
+    node_num_keys: Dict[str, Dict[str, List[str]]]
+    activities: List[str]
+    node_types: List[str]
+    edge_types: List[str]
+    feat_label_dict: Dict[str, List[str]]
+    node_label_dict: Dict[str, List[str]]
+
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -17,6 +20,8 @@ class Metadata:
             "activities": self.activities,
             "node_types": self.node_types,
             "edge_types": self.edge_types,
+            "feat_label_dict": self.feat_label_dict,
+            "node_label_dict": self.node_label_dict,
         }
 
     @classmethod
@@ -29,6 +34,8 @@ class Metadata:
             viewpoint=metadata_dict["viewpoint"],
             node_num_keys=metadata_dict["node_num_keys"],
             activities=metadata_dict["activities"],
-            node_types=metadata_dict.get("node_types", metadata_dict.get("node_types_set")),
-            edge_types=metadata_dict.get("edge_types", metadata_dict.get("edge_types_set")),
+            node_types=metadata_dict.get("node_types"),
+            edge_types=metadata_dict.get("edge_types"),
+            feat_label_dict=metadata_dict.get("feat_label_dict"),
+            node_label_dict=metadata_dict.get("node_label_dict"),
         )

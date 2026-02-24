@@ -12,9 +12,19 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
+from torch_geometric.explain import (
+    Explainer,
+    GNNExplainer,
+    HeteroExplanation,
+)
+
 from tree_search.feature import (
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
+)
+from tree_search.feature_selection import (
+    get_nodes_by_importance,
+    get_feature_labels_by_importance,
 )
 from tree_search.tree_search import Action, TreeSearchCounterFactual
 from tree_search.tree_search_parallel import TreeSearchCounterFactualParallel
@@ -123,6 +133,56 @@ model = model.to(device)
 model.eval()
 
 
+def generate_explanation(p: ProcessExecution) -> HeteroExplanation:
+    graph_map = {"_tmp": {"process_execution": p, y_key: np.nan}}
+    dataset, _, _, feat_label_dict, node_label_dict = build_hetero_dataset(
+        graph_map,
+        metadata.node_num_keys,
+        ocel.object_type_column,
+        ocel.event_activity,
+        metadata.viewpoint,
+        y_key,
+        metadata.activities,
+        allow_multiple_viewpoint_nodes=True,
+    )
+
+    explainer = Explainer(
+        model=model,
+        algorithm=GNNExplainer(epochs=100),
+        explanation_type="model",
+        model_config=dict(
+            mode="binary_classification",
+            task_level="graph",
+            return_type="raw",
+        ),
+        node_mask_type="attributes",
+        threshold_config=dict(
+            threshold_type="topk",
+            value=200,
+        ),
+    )
+
+    data = dataset[0].to(device)
+
+    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+    batch_dict = {
+        node_type: torch.zeros(
+            data[node_type].num_nodes, dtype=torch.long, device=device
+        )
+        for node_type in metadata.node_types
+    }
+
+    return (
+        explainer(
+            x=data.x_dict,
+            edge_index=data.edge_index_dict,
+            batch_dict=batch_dict,
+        ),
+        feat_label_dict,
+        node_label_dict,
+    )
+
+
 @torch.no_grad()
 def process_outcome(p: ProcessExecution) -> bool:
     """Predict the outcome for a single `ProcessExecution` using the loaded GNN model.
@@ -133,7 +193,7 @@ def process_outcome(p: ProcessExecution) -> bool:
         float: The predicted value.
     """
     graph_map = {"_tmp": {"process_execution": p, y_key: np.nan}}
-    dataset, _, _ = build_hetero_dataset(
+    dataset, _, _, _, _ = build_hetero_dataset(
         graph_map,
         metadata.node_num_keys,
         ocel.object_type_column,
@@ -146,12 +206,16 @@ def process_outcome(p: ProcessExecution) -> bool:
 
     data = dataset[0].to(device)
     # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
-    batch_dict = {node_type: torch.zeros(
-        data[node_type].num_nodes, dtype=torch.long, device=device
-    ) for node_type in metadata.node_types}
+    batch_dict = {
+        node_type: torch.zeros(
+            data[node_type].num_nodes, dtype=torch.long, device=device
+        )
+        for node_type in metadata.node_types
+    }
     out = model(data.x_dict, data.edge_index_dict, batch_dict)
 
     return bool(out.argmax(dim=-1).cpu().item())
+
 
 # %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
@@ -160,7 +224,7 @@ target_process_execution_id = "14602"
 selected_attributes = {
     "process_yield": arange(0, 1.01, 0.5),
     # "averageQuality": arange(0, 1.01, 0.5),
-    # "quantity": range(0, 1001, 500),
+    "quantity": range(0, 1001, 500),
 }
 max_change_size = 10
 counter_factual_label = not process_executions[target_process_execution_id]["class"]
@@ -169,19 +233,37 @@ target_process_execution = process_executions[target_process_execution_id][
     "process_execution"
 ]
 
+target_explanation, feat_label_dict, node_label_dict = generate_explanation(
+    target_process_execution
+)
+
+nodes_ordered = [
+    n["label"]
+    for n in get_nodes_by_importance(
+        explanation=target_explanation, node_label_dict=node_label_dict
+    )
+]
+attr_ordered = {
+    node_type: [f["feature"] for f in features]
+    for node_type, features in get_feature_labels_by_importance(
+        explanation=target_explanation, feat_label_dict=feat_label_dict
+    ).items()
+}
 
 # Features for object node attributes
+nodes_attr = target_process_execution.nodes(data="attr")
 object_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
-        value_original=attr[attr_name],
+        value_original=nodes_attr[node_id][attr_name],
         value_range=selected_attributes[attr_name],
+        num_node_attrs=len(nodes_attr[node_id]),
     )
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "OBJECT"
-    for attr_name in attr.keys()
-    if attr_name in selected_attributes
+    for node_id in nodes_ordered
+    if nodes_attr[node_id].get("type", "") == "OBJECT"
+    for attr_name in attr_ordered.get(nodes_attr[node_id][ocel.object_type_column], [])
+    if attr_name in selected_attributes and nodes_attr[node_id].get(attr_name)
 ]
 
 # Features for event node attributes
@@ -189,18 +271,20 @@ event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
         attribute_name=attr_name,
-        value_original=attr[attr_name],
+        value_original=nodes_attr[node_id][attr_name],
         value_range=selected_attributes[attr_name],
+        num_node_attrs=len(nodes_attr[node_id]),
     )
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "EVENT"
-    for attr_name in attr.keys()
-    if attr_name in selected_attributes
+    for node_id in nodes_ordered
+    if nodes_attr[node_id].get("type", "") == "EVENT"
+    for attr_name in attr_ordered.get("EVENT", [])
+    if attr_name in selected_attributes and nodes_attr[node_id].get(attr_name)
 ]
 
 # Object substitution features
 object_substitution_features = []
-for node_id, node_data in target_process_execution.nodes(data=True):
+for node_id in nodes_ordered:
+    node_data = target_process_execution.nodes(data=True)[node_id]
     if node_data["attr"].get("type", "") != "OBJECT":
         continue
 
@@ -236,9 +320,7 @@ for node_id, node_data in target_process_execution.nodes(data=True):
 
 
 available_features = (
-    object_node_attributes
-    # + event_node_attributes
-    # + object_substitution_features
+    object_node_attributes + event_node_attributes + object_substitution_features
     # + event_deletion_features
 )
 for feature in available_features:

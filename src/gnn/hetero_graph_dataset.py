@@ -19,6 +19,8 @@ def construct_graph_dict(
     add_reverse_edges: bool = False,
 ):
     graph_dict = {}
+    feat_label_dict = {}
+    node_label_dict = {}
     event_object_types = list(node_num_keys[node_type_object].keys()) + list(
         node_num_keys[node_type_event].keys()
     )
@@ -44,7 +46,8 @@ def construct_graph_dict(
     for t in type_to_nodes.keys():
         nodes = type_to_nodes.get(t, [])
         type_to_idx[t] = {n: i for i, n in enumerate(nodes)}
-        feats = []
+        feat_values = []
+        node_labels = []
         for n in nodes:
             attr = G.nodes[n].get("attr") or {}
             node_type = attr["type"]
@@ -52,19 +55,24 @@ def construct_graph_dict(
                 continue
 
             node_feats = [float(attr.get(k, 0.0)) for k in node_num_keys[node_type][t]]
+            feat_labels = node_num_keys[node_type][t].copy()
 
             # Add activity (event type) embedding
             if activities and node_type == node_type_event:
                 activity_feats = [0] * len(activities)
                 activity_feats[activities.index(attr.get(event_activity_col))] = 1
                 node_feats.extend(activity_feats)
+                feat_labels.extend(activities)
 
             if not node_feats:
                 node_feats = [float(0.0)]
 
-            feats.append(node_feats)
+            feat_values.append(node_feats)
+            node_labels.append(n)
 
-        graph_dict[t] = feats
+        graph_dict[t] = feat_values
+        feat_label_dict[t] = feat_labels
+        node_label_dict[t] = node_labels
 
     # Collect edges
     edge_dict = defaultdict(list)
@@ -88,7 +96,13 @@ def construct_graph_dict(
 
     graph_dict["y"] = trace_dict.get(y_key)
 
-    return graph_dict, type_to_nodes.keys(), edge_dict.keys()
+    return (
+        graph_dict,
+        type_to_nodes.keys(),
+        edge_dict.keys(),
+        feat_label_dict,
+        node_label_dict,
+    )
 
 
 def build_hetero_dataset(
@@ -108,14 +122,16 @@ def build_hetero_dataset(
     edge_types_set = set()
     for id, trace_dict in graphs.items():
         try:
-            graph_dict, node_types, edge_types = construct_graph_dict(
-                trace_dict,
-                node_num_keys,
-                object_type_col,
-                event_activity_col,
-                y_key,
-                activities=activities,
-                add_reverse_edges=add_reverse_edges,
+            graph_dict, node_types, edge_types, feat_label_dict, node_label_dict = (
+                construct_graph_dict(
+                    trace_dict,
+                    node_num_keys,
+                    object_type_col,
+                    event_activity_col,
+                    y_key,
+                    activities=activities,
+                    add_reverse_edges=add_reverse_edges,
+                )
             )
 
             node_types_set.update(node_types)
@@ -158,7 +174,7 @@ def build_hetero_dataset(
     if path_dataset:
         torch.save(dataset, path_dataset)
 
-    return dataset, node_types_set, edge_types_set
+    return dataset, node_types_set, edge_types_set, feat_label_dict, node_label_dict
 
 
 def construct_graph_dict_multiple_viewpoint_nodes(
@@ -174,6 +190,8 @@ def construct_graph_dict_multiple_viewpoint_nodes(
     add_reverse_edges: bool = False,
 ):
     graph_dict = {}
+    feat_label_dict = {}
+    node_label_dict = {}
     event_object_types = list(node_num_keys[node_type_object].keys()) + list(
         node_num_keys[node_type_event].keys()
     )
@@ -201,7 +219,8 @@ def construct_graph_dict_multiple_viewpoint_nodes(
     for t in type_to_nodes.keys():
         nodes = type_to_nodes.get(t, [])
         type_to_idx[t] = {n: i for i, n in enumerate(nodes)}
-        feats = []
+        feat_values = []
+        node_labels = []
         for n in nodes:
             attr = graph.nodes[n].get("attr") or {}
             node_type = attr["type"]
@@ -211,13 +230,16 @@ def construct_graph_dict_multiple_viewpoint_nodes(
             node_feats = [float(attr.get(k, 0.0)) for k in node_num_keys[node_type][t]]
             if not node_feats:
                 node_feats = [float(0.0)]
-            feats.append(node_feats)
+            feat_values.append(node_feats)
+            feat_labels = node_num_keys[node_type][t].copy()
+            node_labels.append(n)
 
             # Add activity (event type) embedding
             if activities and node_type == node_type_event:
                 activity_feats = [0] * len(activities)
                 activity_feats[activities.index(attr.get(event_activity_col))] = 1
                 node_feats.extend(activity_feats)
+                feat_labels.extend(activities)
 
             if t == viewpoint:
                 graph_dict["y_nodes"].append(n)
@@ -229,7 +251,9 @@ def construct_graph_dict_multiple_viewpoint_nodes(
                         print(f"No y value found for node {n}")
                         graph_dict["y"].append(np.nan)
 
-        graph_dict[t] = feats
+        graph_dict[t] = feat_values
+        feat_label_dict[t] = feat_labels
+        node_label_dict[t] = node_labels
 
     # Collect edges
     edge_dict = defaultdict(list)
@@ -251,7 +275,13 @@ def construct_graph_dict_multiple_viewpoint_nodes(
 
     graph_dict |= edge_dict
 
-    return graph_dict, type_to_nodes.keys(), edge_dict.keys()
+    return (
+        graph_dict,
+        type_to_nodes.keys(),
+        edge_dict.keys(),
+        feat_label_dict,
+        node_label_dict,
+    )
 
 
 def build_hetero_data(
@@ -266,15 +296,17 @@ def build_hetero_data(
     path_dataset: str = None,
 ) -> Tuple[HeteroData, Set[str], Set[str]]:
     hetero_data = HeteroData()
-    graph_dict, node_types, edge_types = construct_graph_dict_multiple_viewpoint_nodes(
-        graph=graph,
-        node_num_keys=node_num_keys,
-        object_type_col=object_type_col,
-        event_activity_col=event_activity_col,
-        viewpoint=viewpoint,
-        node_y_mapping=node_y_mapping,
-        activities=activities,
-        add_reverse_edges=add_reverse_edges,
+    graph_dict, node_types, edge_types, feat_label_dict, node_label_dict = (
+        construct_graph_dict_multiple_viewpoint_nodes(
+            graph=graph,
+            node_num_keys=node_num_keys,
+            object_type_col=object_type_col,
+            event_activity_col=event_activity_col,
+            viewpoint=viewpoint,
+            node_y_mapping=node_y_mapping,
+            activities=activities,
+            add_reverse_edges=add_reverse_edges,
+        )
     )
 
     if viewpoint not in node_types:
@@ -295,7 +327,14 @@ def build_hetero_data(
     if path_dataset:
         torch.save(hetero_data, path_dataset)
 
-    return hetero_data, set(node_types), set(edge_types), graph_dict["y_nodes"]
+    return (
+        hetero_data,
+        set(node_types),
+        set(edge_types),
+        graph_dict["y_nodes"],
+        feat_label_dict,
+        node_label_dict,
+    )
 
 
 def add_train_val_test_masks(
