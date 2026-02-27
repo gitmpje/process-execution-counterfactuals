@@ -64,7 +64,7 @@ def node_attribute_diffs(
     n1,
     n2,
     exclude_attributes: List[str] = None,
-    discretized_event_attributes: Dict[str, Any] = None,
+    discretized_attributes: Dict[str, Any] = None,
 ):
     """
     Compute node attribute differences.
@@ -83,7 +83,7 @@ def node_attribute_diffs(
     for k in attribute_labels:
         v1 = attr1.get(k)
         v2 = attr2.get(k)
-        discr = discretized_event_attributes.get(k)
+        discr = discretized_attributes.get(k)
         if discr:
             diffs.append(attribute_diff(v1, v2, interval_size=discr[0]))
         else:
@@ -99,7 +99,7 @@ def node_subst_cost(
     w_attr: float = 1.0,
     exclude_attributes: List[str] = None,
     aggregation_type: str = "average",
-    discretized_event_attributes: Dict[str, Any] = None,
+    discretized_attributes: Dict[str, Any] = None,
 ):
     # Type difference
     t_diff = node_type_diff(n1, n2)
@@ -110,7 +110,7 @@ def node_subst_cost(
             n1,
             n2,
             exclude_attributes=exclude_attributes,
-            discretized_event_attributes=discretized_event_attributes,
+            discretized_attributes=discretized_attributes,
         )
         if aggregation_type == "average":
             # Return average difference across attributes (0..1)

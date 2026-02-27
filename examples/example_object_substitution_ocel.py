@@ -7,7 +7,8 @@ from networkx import Graph
 
 from tree_search.feature_helpers import (
     build_object_substitution_features,
-    build_node_attribute_numeric,
+    build_node_attribute_features,
+    construct_attribute_spec_dict,
 )
 from tree_search.tree_search import Action, TreeSearchCounterFactual
 from process_execution.process_execution import (
@@ -71,12 +72,24 @@ print("Classes:", Counter([d["class"] for d in trace_graphs.values()]))
 # %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
 target_process_execution_id = "198"
-
-discretized_event_attributes = {
-    "temperature": (0.5, 1.01),
-    "quantity": (500, 1001),
-}
+num_bins = 2
 max_change_size = 10
+
+selected_attributes = [
+    "temperature",
+    "quantity",
+]
+
+attribute_spec_dict = construct_attribute_spec_dict(
+    attributes=selected_attributes,
+    ocel=ocel,
+    node_cat_keys={},
+    node_num_keys={
+        "EVENT": {"EVENT": {"temperature": (0, 1), "quantity": (500, 1000)}}
+    },
+    num_bins=num_bins,
+)
+
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
 
 
@@ -108,13 +121,13 @@ object_substitution_features = build_object_substitution_features(
     graph=target_process_execution,
     check=_check_capability,
     object_type_column=ocel.object_type_column,
-    discretized_event_attributes=discretized_event_attributes,
+    attribute_spec_dict=attribute_spec_dict,
 )
 
 # Features for event node attributes
-event_node_attributes = build_node_attribute_numeric(
+event_node_attributes = build_node_attribute_features(
     target_nodes=target_process_execution.nodes(data=True),
-    selected_event_attributes=discretized_event_attributes,
+    attribute_spec_dict=attribute_spec_dict,
     node_type="EVENT",
 )
 

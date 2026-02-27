@@ -158,6 +158,7 @@ def extract_process_execution(
     object_graph = subgraph(G, objects_traced)
     selected_graph = MultiDiGraph(edge_subgraph(G, edges_traced))
     selected_graph.add_edges_from(object_graph.edges(data=True))
+
     return ProcessExecution(selected_graph)
 
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from process_execution.process_execution import ProcessExecution
 from process_execution.comparison import (
+    attribute_diff,
     attribute_diff_numeric,
     node_subst_cost,
 )
@@ -34,8 +35,7 @@ class NodeAttributeNumeric(Feature):
     Attributes:
         node_id (str): Identifier of the node whose attribute is being modified.
         attribute_name (str): Nme of the attribute to be modified.
-        value_original (int | float | complex): Original value of the node attribute.
-        value_range (Iterable): Range of possible values for the attribute.
+        value_original (int | float): Original value of the node attribute.
     """
 
     def __init__(
@@ -43,7 +43,7 @@ class NodeAttributeNumeric(Feature):
         *args,
         node_id: str,
         attribute_name: str,
-        value_original: int | float | complex,
+        value_original: int | float,
         value_step: int | float,
         value_max: int | float,
         **kwargs,
@@ -63,28 +63,31 @@ class NodeAttributeNumeric(Feature):
 
     def action_space(
         self,
-        current_change_value: int | float | complex = 0,
-        max_change_size_delta: int | float | complex = 1,
-    ) -> Iterable[int | float | complex]:
+        current_change_value: int | float = 0,
+        max_change_size_delta: int | float = 1,
+    ) -> Iterable[int | float]:
         """
         Generate possible values for the node attribute feature.
         Args:
             current_change_value (Optional[List[str]]): Current change value.
-            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
         Yields:
-            Iterable[int | float | complex]: Possible values for the attribute.
+            Iterable[int | float]: Possible values for the attribute.
         """
+        current_change_value = current_change_value if current_change_value else 0
 
-        change_value = current_change_value if current_change_value else 0
-        current_change_size = self.change_size(change_value)
+        value_current = self.value_original + current_change_value
+        current_change_size = self.change_size(current_change_value)
 
-        while change_value + self.value_step < self.value_max:
-            change_value += self.value_step
+        change_value = current_change_size + self.value_step
+        while value_current + change_value <= self.value_max:
             if (
                 self.change_size(change_value) - current_change_size
                 <= max_change_size_delta
             ):
                 yield change_value
+
+            change_value += self.value_step
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
         """
@@ -103,6 +106,80 @@ class NodeAttributeNumeric(Feature):
             self.value_original,
             self.value_original + change_value,
             interval_size=self.value_step,
+        )
+
+
+class NodeAttributeCategorical(Feature):
+    """
+    Feature representing a node attribute that can be modified.
+    Attributes:
+        node_id (str): Identifier of the node whose attribute is being modified.
+        attribute_name (str): Nme of the attribute to be modified.
+        value_original (int | float): Original value of the node attribute.
+        value_range (Iterable): Range of possible values for the attribute.
+    """
+
+    def __init__(
+        self,
+        *args,
+        node_id: str,
+        attribute_name: str,
+        value_original: str,
+        category_values: List[str],
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.node_id = node_id
+        self.attribute_name = attribute_name
+        self.value_original = value_original
+        self.category_values = category_values
+
+    def __repr__(self) -> str:
+        return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
+
+    def action_space_size(self):
+        return len(self.category_values)
+
+    def action_space(
+        self,
+        current_change_value: Optional[str] = None,
+        max_change_size_delta: Optional[int | float] = 1,
+    ) -> Iterable[str]:
+        """
+        Generate possible values for the node attribute feature.
+        Args:
+            current_change_value (Optional[str]): Current change value.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
+        Yields:
+            Iterable[str]: Possible values for the attribute.
+        """
+        current_change_size = (
+            self.change_size(current_change_value) if current_change_value else 0
+        )
+
+        for change_value in self.category_values:
+            if (
+                self.change_size(change_value) - current_change_size
+                <= max_change_size_delta
+            ):
+                yield change_value
+
+    def apply_change(self, p: ProcessExecution, value: Any) -> ProcessExecution:
+        """
+        Apply the attribute value change to the process execution.
+        Args:
+            p (ProcessExecution): The process execution to modify.
+            delta_value (Any): The value to change the attribute value to.
+        Returns:
+            ProcessExecution: The modified process execution.
+        """
+        p.nodes()[self.node_id]["attr"][self.attribute_name] = value
+        return p
+
+    def change_size(self, value_change=0):
+        return attribute_diff(
+            self.value_original,
+            value_change,
         )
 
 
@@ -125,7 +202,7 @@ class ObjectNodeSubstitution(Feature):
         substitution_objects: List[Tuple[str, dict]],
         event_ids: List[str],
         object_data: dict = None,
-        discretized_event_attributes: Dict[str, Any] = None,
+        discretized_attributes: Dict[str, Any] = None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -133,7 +210,7 @@ class ObjectNodeSubstitution(Feature):
         self.substitution_objects = substitution_objects
         self.event_ids = event_ids
         self.object_data = object_data if object_data else {}
-        self.discretized_event_attributes = discretized_event_attributes
+        self.discretized_attributes = discretized_attributes
 
     def __repr__(self) -> str:
         return f"Event(s) {self.event_ids} - object {self.object_id} with {len(self.substitution_objects)} substitution options"
@@ -144,13 +221,13 @@ class ObjectNodeSubstitution(Feature):
     def action_space(
         self,
         current_change_value: Tuple[str, dict] = None,
-        max_change_size_delta: int | float | complex = 1,
+        max_change_size_delta: int | float = 1,
     ) -> Iterable[Tuple[str, dict]]:
         """
         Generate possible substitution options for the object node feature.
         Args:
             current_change_value (Optional[List[str]]): Current change value.
-            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
         Yields:
             Iterable[Tuple[str, dict]]: substitution object.
         """
@@ -201,7 +278,7 @@ class ObjectNodeSubstitution(Feature):
             subst_node_data,
             exclude_attributes=TYPE_ATTRIBUTES,
             aggregation_type="sum",
-            discretized_event_attributes=self.discretized_event_attributes,
+            discretized_attributes=self.discretized_attributes,
         )
 
 
@@ -246,13 +323,13 @@ class EventNodeDeletion(Feature):
     def action_space(
         self,
         current_change_value: Optional[List[str]] = None,
-        max_change_size_delta: int | float | complex = 1,
+        max_change_size_delta: int | float = 1,
     ) -> Iterable[List[str]]:
         """
         Generate possible deletion options for the object node feature.
         Args:
             current_change_value (Optional[List[str]]): Current change value.
-            max_change_size_delta (int | float | complex): Upper bound on the delta of the change size.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
         Yields:
             Iterable[List[str]]: Possible deletion options.
         """

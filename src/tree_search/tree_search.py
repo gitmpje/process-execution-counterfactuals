@@ -66,6 +66,34 @@ class Action:
         )
         return new_obj
 
+    def __eq__(self, other):
+        """
+        Equality check for Action objects.
+        Two Actions are equal if they are the same type and their event_deletion,
+        object_substitution, and node_attributes_modification dictionaries are equal.
+        """
+        if not isinstance(other, Action):
+            return NotImplemented
+        return (
+            self.event_deletion == other.event_deletion
+            and self.object_substitution == other.object_substitution
+            and self.node_attributes_modification == other.node_attributes_modification
+        )
+
+    def __ne__(self, other):
+        """
+        Inequality check for Action objects.
+        Two Actions are not equal if their event_deletion,
+        object_substitution, or node_attributes_modification dictionaries are different.
+        """
+        if not isinstance(other, Action):
+            return NotImplemented
+        return (
+            self.event_deletion != other.event_deletion
+            or self.object_substitution != other.object_substitution
+            or self.node_attributes_modification != other.node_attributes_modification
+        )
+
     def get_change_value(self, feature: Feature) -> Any | None:
         """
         Get the current change value for a given feature.
@@ -106,7 +134,8 @@ class Action:
             int: The total number of changes.
         """
         deletion_size = sum(
-            feature.change_size(del_nodes=del_nodes) for feature, del_nodes in self.event_deletion.items()
+            feature.change_size(del_nodes=del_nodes)
+            for feature, del_nodes in self.event_deletion.items()
         )
 
         substitution_size = sum(
@@ -304,8 +333,16 @@ class TreeSearchCounterFactual:
             explored, selected = self.explore_features(
                 action, features, process_execution, change_size
             )
-            next_actions_features.extend(explored)
-            selected_actions.extend(selected)
+
+            # Collect distinct next actions
+            for next_action in explored:
+                if next_action not in next_actions_features:
+                    next_actions_features.append(next_action)
+
+            # Collect distinct selected actions
+            for selected_action in selected:
+                if selected_action not in selected_actions:
+                    selected_actions.append(selected_action)
 
         self.logger.info(
             "Explored %s actions for change_size %s",

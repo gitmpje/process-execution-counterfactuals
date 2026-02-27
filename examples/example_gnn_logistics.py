@@ -17,7 +17,7 @@ from tree_search.feature import (
     ObjectNodeSubstitution,
 )
 
-from gnn.hetero_graph_dataset import build_hetero_data
+from gnn.hetero_graph_data import build_hetero_data
 from process_execution.process_execution import (
     extract_process_execution,
 )

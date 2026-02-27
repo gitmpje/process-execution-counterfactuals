@@ -48,7 +48,7 @@ class HANGraphLevel(nn.Module):
         Args:
             x_dict: Dictionary of node features
             edge_index_dict: Dictionary of edge indices
-            batch: Batch vector indicating which graph each node belongs to
+            batch_dict: Dictionary of batch vectors indicating which graph each node belongs to
 
         Returns:
             Graph-level predictions (one per graph in batch)

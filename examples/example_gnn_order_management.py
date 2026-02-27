@@ -15,19 +15,25 @@ from tree_search.feature_helpers import (
     build_node_attribute_numeric,
 )
 
-from gnn.hetero_graph_dataset import build_hetero_data
+from gnn.hetero_graph_data import build_hetero_data
 from gnn.utils import Metadata
 from process_execution.process_execution import (
     extract_process_execution,
 )
 from process_execution.utils import build_ocel_dfg
 
-dirname = os.path.dirname(__file__)
-path_ocel = os.path.join(dirname, "ocel/data/order-management.sqlite")
+target_activity = "place order"
+viewpoint = "orders"
+backward = False
+y_key = "class"
+dataset_name = f"example_order_management-{viewpoint.replace(' ', '_')}-{y_key.replace(' ', '_')}-pe"
 
-tmp_dir = os.path.join(dirname, "tmp")
-path_model = os.path.join(tmp_dir, "example_order_management-pe.pth")
-path_metadata = os.path.join(tmp_dir, "example_order_management-pe-metadata.json")
+dirname = os.path.dirname(__file__)
+tmp_dir = os.path.join(dirname, "../tmp")
+path_metadata = os.path.join(tmp_dir, f"{dataset_name}-metadata.json")
+path_model = os.path.join(tmp_dir, f"{dataset_name}.pth")
+
+path_ocel = os.path.join(dirname, "ocel/data/order-management.sqlite")
 
 # Unzip .gz files and store to temporary directory
 for var_path in ["path_ocel", "path_model"]:
@@ -49,11 +55,6 @@ with open(path_metadata, "r") as f:
 metadata = Metadata.from_dict(metadata_dict)
 
 # %% Load OCEL and build DFG with aggregation edges
-target_activity = "place order"
-viewpoint = "orders"
-backward = False
-y_key = "class"
-
 ocel = pm4py.read_ocel2_sqlite(path_ocel)
 
 ocel_nx = build_ocel_dfg(ocel)

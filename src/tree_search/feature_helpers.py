@@ -4,6 +4,7 @@ from networkx import Graph
 
 from tree_search.feature import (
     EventNodeDeletion,
+    NodeAttributeCategorical,
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
 )
@@ -27,7 +28,7 @@ def build_object_substitution_features(
     object_type_column: str,
     check: Callable[[Dict, Dict], bool] = lambda a, b: True,
     nodes_order: Iterable[Any] = None,
-    discretized_event_attributes: Dict[str, Any] = None,
+    attribute_spec_dict: Dict[str, Any] = None,
 ) -> List[ObjectNodeSubstitution]:
     """Construct ObjectNodeSubstitution features from target graph nodes.
 
@@ -41,6 +42,15 @@ def build_object_substitution_features(
     Returns a list of `ObjectNodeSubstitution` instances.
     """
     features: List[ObjectNodeSubstitution] = []
+
+    discretized_attributes = {}
+    for attr, spec in attribute_spec_dict.items():
+        if (
+            isinstance(spec, (list, tuple))
+            and len(spec) == 2
+            and all(isinstance(x, (int, float)) for x in spec)
+        ):
+            discretized_attributes[attr] = spec
 
     # Normalize ocel_nodes into a list to allow multiple iterations
     ocel_list = list(ocel_nodes)
@@ -89,7 +99,7 @@ def build_object_substitution_features(
                 object_data=node_data,
                 substitution_objects=substitution_objects,
                 event_ids=event_ids,
-                discretized_event_attributes=discretized_event_attributes,
+                discretized_attributes=discretized_attributes,
             )
         )
 
@@ -146,26 +156,24 @@ def _parse_value_spec(v):
     raise ValueError(f"Unsupported value specification: {v}")
 
 
-def build_node_attribute_numeric(
+def build_node_attribute_features(
     target_nodes: Iterable[Tuple[Any, Any]],
-    selected_event_attributes: Dict[str, Any],
+    attribute_spec_dict: Dict[str, Any],
     node_type: str = "EVENT",
     nodes_order: Iterable[Any] = None,
     attr_order: Dict[str, List[str]] = None,
     object_type_column: str = None,
-) -> List[NodeAttributeNumeric]:
-    """Construct NodeAttributeNumeric features for numeric node attributes.
+) -> List:
+    """Construct NodeAttributeNumeric and NodeAttributeCategorical features.
 
-    - `selected_event_attributes` maps attribute name -> value spec. The value spec can be:
-      - (value_step, value_max)
-      - a `range` object
-      - a numpy `arange`/array or list/tuple of values
-    - `node_type` filters nodes by their `type` attribute ("EVENT" or "OBJECT").
-    - `nodes_order` optional iterable of node ids to control ordering of generated features.
-    - `attr_order` optional mapping used to order attributes per node key. For `EVENT` nodes use key 'EVENT',
-       for `OBJECT` nodes keys should be object type names and `object_type_column` must be provided.
+    `attribute_spec_dict` maps attribute name -> spec where spec is either:
+      - a tuple/list `(value_step, value_max)` (numeric)
+      - a list/iterable of category values (categorical)
+
+    The function returns a list containing instances of `NodeAttributeNumeric`
+    and `NodeAttributeCategorical` as appropriate.
     """
-    features: List[NodeAttributeNumeric] = []
+    features: List = []
 
     target_map = dict(target_nodes)
     if nodes_order is None:
@@ -194,28 +202,154 @@ def build_node_attribute_numeric(
         if ordered_attrs:
             attr_iter = (a for a in ordered_attrs if a in attr)
         else:
-            attr_iter = (a for a in list(attr.keys()) if a in selected_event_attributes)
+            attr_iter = (a for a in list(attr.keys()) if a in attribute_spec_dict)
 
         for attr_name in attr_iter:
-            if attr_name in selected_event_attributes:
+            if attr_name not in attribute_spec_dict:
+                continue
+            spec = attribute_spec_dict[attr_name]
+
+            # Numeric spec: tuple/list of two numeric values (step, max)
+            is_numeric = False
+            try:
+                if (
+                    isinstance(spec, (list, tuple))
+                    and len(spec) == 2
+                    and all(isinstance(x, (int, float)) for x in spec)
+                ):
+                    is_numeric = True
+            except Exception:
+                is_numeric = False
+
+            if is_numeric:
                 try:
-                    step, vmax = _parse_value_spec(selected_event_attributes[attr_name])
+                    step, vmax = _parse_value_spec(spec)
                 except ValueError:
                     continue
                 features.append(
                     NodeAttributeNumeric(
                         node_id=node_id,
                         attribute_name=attr_name,
-                        value_original=attr[attr_name],
+                        value_original=attr.get(attr_name),
                         value_step=step,
                         value_max=vmax,
                     )
                 )
+            else:
+                # Categorical: expect an iterable/list of category values
+                if spec is None:
+                    continue
+                # Convert to list of values
+                try:
+                    category_values = list(spec)
+                except Exception:
+                    continue
+                if not category_values:
+                    continue
+                value_original = attr.get(attr_name)
+                features.append(
+                    NodeAttributeCategorical(
+                        node_id=node_id,
+                        attribute_name=attr_name,
+                        value_original=value_original,
+                        category_values=category_values,
+                    )
+                )
+
     return features
+
+
+def construct_attribute_spec_dict(
+    attributes: List[str],
+    ocel,
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+    node_num_keys: Dict[str, Dict[str, Any]],
+    num_bins: int = 2,
+) -> Dict[str, Any]:
+    """Construct a mapping of attribute -> spec for selected attributes.
+
+    - Categorical attributes map to a list of category values (from node_cat_keys).
+    - Numeric attributes map to a tuple `(step, max)` where `step = (max-min)/num_bins`.
+
+    The function searches `node_cat_keys` and `node_num_keys` for occurrences of
+    each attribute across node types and object/event types. If `node_num_keys`
+    contains lists rather than min/max pairs, this helper will query `ocel`
+    DataFrames to compute min/max.
+    """
+    specs: Dict[str, Any] = {}
+
+    # Helper to add categorical values preserving order
+    def _add_category(attr_name: str, vals: List[Any]):
+        if attr_name not in specs:
+            specs[attr_name] = []
+        existing = set(specs[attr_name])
+        for v in vals:
+            if v not in existing:
+                specs[attr_name].append(v)
+                existing.add(v)
+
+    # Gather categorical values from node_cat_keys
+    if isinstance(node_cat_keys, dict):
+        for type_map in node_cat_keys.values():
+            if not isinstance(type_map, dict):
+                continue
+            for col_map in type_map.values():
+                if not isinstance(col_map, dict):
+                    continue
+                for attr in attributes:
+                    if attr in col_map and col_map[attr]:
+                        _add_category(attr, list(col_map[attr]))
+
+    # Gather numeric ranges from node_num_keys
+    # Collect min/max values across all occurrences and then compute step
+    numeric_ranges: Dict[str, List[Tuple[float, float]]] = {}
+    if isinstance(node_num_keys, dict):
+        for node_type_key, type_map in node_num_keys.items():
+            if not isinstance(type_map, dict):
+                continue
+            for obj_type, spec in type_map.items():
+                # spec may be a dict mapping col->(min,max) or a list of col names
+                for attr in attributes:
+                    if isinstance(spec, dict) and attr in spec:
+                        vmin, vmax = spec[attr]
+                        numeric_ranges.setdefault(attr, []).append(
+                            (float(vmin), float(vmax))
+                        )
+                    elif isinstance(spec, (list, tuple)) and attr in spec:
+                        # fall back to ocel DataFrames to compute min/max per obj/event type
+                        try:
+                            if node_type_key.upper().startswith("OBJECT"):
+                                df = ocel.objects
+                                df_t = df[df[ocel.object_type_column] == obj_type]
+                            else:
+                                df = ocel.events
+                                df_t = df[df[ocel.event_activity] == obj_type]
+                            if not df_t.empty and attr in df_t.columns:
+                                vmin = float(df_t[attr].min())
+                                vmax = float(df_t[attr].max())
+                                numeric_ranges.setdefault(attr, []).append((vmin, vmax))
+                        except Exception:
+                            continue
+
+    # If any numeric ranges found, compute global min/max and step
+    for attr, ranges in numeric_ranges.items():
+        if not ranges:
+            continue
+        global_min = min(r[0] for r in ranges)
+        global_max = max(r[1] for r in ranges)
+        if global_max == global_min:
+            step = 1.0
+        else:
+            step = (global_max - global_min) / float(max(1, num_bins))
+        specs[attr] = (step, global_max)
+
+    # Note: categorical specs (if any) will already have been added above
+    return specs
 
 
 __all__ = [
     "build_object_substitution_features",
     "build_event_deletion_features",
-    "build_node_attribute_numeric",
+    "build_node_attribute_features",
+    "construct_attribute_spec_dict",
 ]

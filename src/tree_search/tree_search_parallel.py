@@ -67,8 +67,15 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
             for explored, selected in pool.starmap(
                 self.explore_features, evaluate_args
             ):
-                next_actions_features.extend(explored)
-                selected_actions.extend(selected)
+                # Collect distinct next actions
+                for next_action in explored:
+                    if next_action not in next_actions_features:
+                        next_actions_features.append(next_action)
+
+                # Collect distinct selected actions
+                for selected_action in selected:
+                    if selected_action not in selected_actions:
+                        selected_actions.append(selected_action)
 
         self.logger.info(
             "Explored %s actions for change_size %s",
