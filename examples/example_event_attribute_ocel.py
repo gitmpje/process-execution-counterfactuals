@@ -5,13 +5,14 @@ import pm4py
 from collections import Counter
 from networkx import Graph
 
+from tree_search.action import Action
 from tree_search.feature_helpers import (
     build_object_substitution_features,
     build_event_deletion_features,
     build_node_attribute_features,
     construct_attribute_spec_dict,
 )
-from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.tree_search import TreeSearchCounterFactual
 
 from process_execution.process_execution import (
     extract_process_execution,
@@ -98,7 +99,7 @@ attribute_spec_dict = construct_attribute_spec_dict(
     ocel=ocel,
     node_cat_keys={},
     node_num_keys={
-        "EVENT": {"EVENT": {"temperature": (0, 1), "quantity": (500, 1000)}}
+        "EVENT": {"EVENT": {"temperature": (0, 1), "quantity": (0, 1000)}}
     },
     num_bins=num_bins,
 )
@@ -107,6 +108,7 @@ max_change_size = 10
 
 counter_factual_label = not trace_graphs[target_process_execution_id]["class"]
 
+print(attribute_spec_dict)
 
 # Define dummy function that determines process outcome
 # Knowing the 'root cause' event attribute

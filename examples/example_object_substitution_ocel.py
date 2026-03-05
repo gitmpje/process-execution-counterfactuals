@@ -10,11 +10,13 @@ from tree_search.feature_helpers import (
     build_node_attribute_features,
     construct_attribute_spec_dict,
 )
-from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.action import Action
+from tree_search.tree_search import TreeSearchCounterFactual
 from process_execution.process_execution import (
     extract_process_execution,
     ProcessExecution,
 )
+
 from process_execution.utils import build_ocel_dfg
 
 path_ocel = "data/example_object_substitution_ocel.json"

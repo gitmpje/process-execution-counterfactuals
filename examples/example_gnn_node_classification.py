@@ -10,8 +10,8 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from tree_search.tree_search import Action
-from tree_search.tree_search_parallel import TreeSearchCounterFactualParallel
+from tree_search.action import Action
+from tree_search.tree_search import TreeSearchCounterFactual
 from tree_search.feature import (
     EventNodeDeletion,
     NodeAttributeNumeric,
@@ -161,7 +161,6 @@ model.eval()
 # Select process execution to generate counterfactual for
 target_process_execution_id = "14602"
 max_change_size = 5
-num_workers = 10
 
 selected_attributes = {
     "temperature": arange(0, 1.01, 0.5),
@@ -308,11 +307,10 @@ for feature in available_features:
 print(f"Total number of features: {len(available_features)}")
 
 # %% Run tree search algorithm to find counter factuals
-tree_search = TreeSearchCounterFactualParallel(
+tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
     max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
-    num_workers=num_workers,
 )
 
 selected_actions = tree_search.search_layer(
@@ -326,25 +324,3 @@ for selected_action in sorted(
     selected_actions, key=lambda a: a.action_size(), reverse=True
 ):
     print(f"Change size {selected_action.action_size()}:", selected_action)
-
-
-# %% Visualization
-def visualize_trace_graph(
-    identifier: str, output_file_name: str = "figures/target_process_execution.svg"
-):
-    from networkx import nx_agraph
-    from process_execution.visualization import (
-        apply_node_styles_nx,
-        apply_edge_styles_nx,
-    )
-
-    graph = trace_graphs[identifier]["process_execution"]
-
-    apply_node_styles_nx(graph)
-    apply_edge_styles_nx(graph)
-
-    agraph = nx_agraph.to_agraph(graph)
-    agraph.draw(output_file_name, prog="dot")
-
-
-visualize_trace_graph(target_process_execution_id)

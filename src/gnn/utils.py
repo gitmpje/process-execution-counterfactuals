@@ -1,14 +1,23 @@
 from dataclasses import dataclass
 from networkx import Graph
-from numpy import nan
 from pandas import DataFrame
 from torch import save as tsave
+from torch import long, zeros
 from torch_geometric.data import HeteroData
+from torch_geometric.explain import (
+    Explainer,
+    GNNExplainer,
+    HeteroExplanation,
+)
 from typing import Callable, Dict, List, Optional, Tuple, Any
 
 
 from process_execution.process_execution import extract_process_execution
 from gnn.hetero_graph_data import build_hetero_data
+from tree_search.feature_selection import (
+    get_nodes_by_importance,
+    get_feature_labels_by_importance,
+)
 
 
 @dataclass
@@ -20,6 +29,7 @@ class Metadata:
     edge_types: List[str]
     feat_label_dict: Dict[str, List[str]]
     normalized: bool
+    feature_per_category: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -30,6 +40,7 @@ class Metadata:
             "edge_types": self.edge_types,
             "feat_label_dict": self.feat_label_dict,
             "normalized": self.normalized,
+            "feature_per_category": self.feature_per_category,
         }
 
     @classmethod
@@ -45,6 +56,7 @@ class Metadata:
             edge_types=metadata_dict.get("edge_types"),
             feat_label_dict=metadata_dict.get("feat_label_dict"),
             normalized=metadata_dict.get("normalized"),
+            feature_per_category=metadata_dict.get("feature_per_category"),
         )
 
 
@@ -215,11 +227,13 @@ def build_process_execution_dataset(
     viewpoint: str,
     trace_target_activity_type: Optional[str] = None,
     trace_backward: bool = False,
-    y_function: Optional[Callable[[Graph, str], int | float | None]] = None,
+    graph_y_function: Optional[Callable[[Graph, str], int | float]] = None,
+    node_y_mapping: Optional[dict] = None,
     object_type_col: str = "ocel:type",
     event_activity_col: str = "ocel:activity",
     add_reverse_edges: bool = False,
     normalize: bool = False,
+    feature_per_category: bool = False,
     path_pe_dataset: Optional[str] = None,
 ) -> Tuple[List[HeteroData], Metadata]:
     """
@@ -234,7 +248,7 @@ def build_process_execution_dataset(
         object_types: List of object types to consider in the trace.
         target_activity_type: Activity type to end the trace. Can be None for full traces.
         backward: Whether to trace backward (True) or forward (False).
-        y_function: Optional callable that determines the target value for each event.
+        graph_y_function: Optional callable that determines the target value for each graph.
             Should take (graph, event_id) and return an int/float/None.
             If None, y values will be set to NaN and can be filled later.
         node_cat_keys: Dict mapping node types to categorical attributes and their unique values.
@@ -273,16 +287,6 @@ def build_process_execution_dataset(
                 backward=trace_backward,
             )
 
-            # Determine y value if y_function is provided
-            if y_function is not None:
-                y_value = y_function(G, event)
-                if y_value is None:
-                    continue
-                node_y_mapping = {event: y_value}
-            else:
-                # Set placeholder for y values to be filled later
-                node_y_mapping = {event: nan}
-
             # Build HeteroData graph
             hetero_data, n_types, e_types, _, feat_labels, _ = build_hetero_data(
                 graph=G,
@@ -294,10 +298,12 @@ def build_process_execution_dataset(
                 node_y_mapping=node_y_mapping,
                 add_reverse_edges=add_reverse_edges,
                 normalize=normalize,
+                feature_per_category=feature_per_category,
             )
 
-            # Set graph-level y if y_function was provided
-            if y_function is not None:
+            # Set graph-level y if graph_y_function was provided
+            if graph_y_function is not None:
+                y_value = graph_y_function(G, event)
                 hetero_data.y = y_value
 
             dataset.append(hetero_data)
@@ -333,6 +339,84 @@ def build_process_execution_dataset(
         edge_types=list(edge_types_set),
         feat_label_dict=feat_label_dict,
         normalized=normalize,
+        feature_per_category=feature_per_category,
     )
 
     return dataset, metadata
+
+
+def generate_explanation(
+    G: Graph,
+    metadata: Metadata,
+    model,
+    object_type_col: str,
+    event_activity_col: str,
+    verbose=False,
+) -> HeteroExplanation:
+    device = next(model.parameters()).device
+
+    data, _, _, _, feat_label_dict, node_label_dict = build_hetero_data(
+        graph=G,
+        node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
+        object_type_col=object_type_col,
+        event_activity_col=event_activity_col,
+        viewpoint=metadata.viewpoint,
+        normalize=metadata.normalized,
+        feature_per_category=metadata.feature_per_category,
+    )
+
+    data = data.to(device)
+
+    explainer = Explainer(
+        model=model,
+        algorithm=GNNExplainer(epochs=100),
+        explanation_type="model",
+        model_config=dict(
+            mode="binary_classification",
+            task_level="graph",
+            return_type="raw",
+        ),
+        node_mask_type="attributes",
+        threshold_config=dict(
+            threshold_type="topk",
+            value=200,
+        ),
+    )
+    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+    batch_dict = {
+        node_type: zeros(data[node_type].num_nodes, dtype=long, device=device)
+        for node_type in metadata.node_types
+    }
+    explanation = explainer(
+        x=data.x_dict,
+        edge_index=data.edge_index_dict,
+        batch_dict=batch_dict,
+    )
+
+    if verbose:
+        top_nodes = get_nodes_by_importance(explanation, node_label_dict, top_k=20)
+
+        print("Top nodes by importance:")
+        for n in top_nodes:
+            print(
+                f"{n['label']} ({n['node_type']}:{n['node_index']}): {n['importance']:.6f}"
+            )
+
+        top_features = get_feature_labels_by_importance(
+            explanation,
+            metadata.feat_label_dict,
+            feature_per_category=metadata.feature_per_category,
+            top_k=10,
+        )
+        print("\nTop features by importance per node type:")
+        for nt, feats in top_features.items():
+            print(f"\nNode type: {nt}")
+            for f in feats:
+                print(f"  {f['feature']}: {f['importance']:.6f}")
+
+    return (
+        explanation,
+        feat_label_dict,
+        node_label_dict,
+    )

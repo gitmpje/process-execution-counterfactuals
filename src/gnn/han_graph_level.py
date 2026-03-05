@@ -29,16 +29,23 @@ class HANGraphLevel(nn.Module):
         self.pooling_method = pooling_method
 
         self.han_convs = nn.ModuleList()
+        current_in = in_channels
         for _ in range(num_layers):
             self.han_convs.append(
                 HANConv(
-                    in_channels=in_channels,
+                    in_channels=current_in,
                     out_channels=hidden_channels,
                     heads=heads,
                     dropout=dropout,
                     metadata=self.metadata,
                 )
             )
+
+            if isinstance(current_in, dict):
+                # Map each node type to hidden_channels for subsequent layers
+                current_in = {nt: hidden_channels for nt in current_in.keys()}
+            else:
+                current_in = hidden_channels
         self.lin = nn.Linear(hidden_channels, out_channels)
 
     def forward(self, x_dict, edge_index_dict, batch_dict):
@@ -56,19 +63,47 @@ class HANGraphLevel(nn.Module):
         for han_conv in self.han_convs:
             x_dict = han_conv(x_dict, edge_index_dict)
 
+            # HANConv may return `None` for node types with no nodes or edges.
+            # Substitute an empty tensor matching the conv's output dimension.
+            out_dim = han_conv.out_channels
+            device = next(han_conv.parameters()).device
+            for nt, v in list(x_dict.items()):
+                if v is None:
+                    x_dict[nt] = torch.zeros((0, out_dim), device=device)
+
+        # Determine the expected batch size (number of graphs) across all node types.
+        batch_size = 0
+        for b in batch_dict.values():
+            if b.numel() > 0:
+                batch_size = max(batch_size, int(b.max().item() + 1))
+
         # Pool over all node types
         pooled = []
         for node_type, x in x_dict.items():
-            pooled.append(global_mean_pool(x, batch_dict[node_type]))
-        graph_emb = torch.stack(pooled).mean(dim=0)  # Average over node types
+            # HANConv may return `None` for a type with no nodes or no incoming messages.
+            # also skip tensors with zero elements (no nodes of this type)
+            if x is None or x.numel() == 0:
+                continue
+
+            # Global pool result should contain one row per graph even
+            # if some graphs have no nodes of this type.
+            pooled.append(global_mean_pool(x, batch_dict[node_type], size=batch_size))
+
+        if pooled:
+            # Average over node types
+            graph_emb = torch.stack(pooled).mean(dim=0)
+        else:
+            # If no valid node-type embeddings were produced fall back to a zero vector.
+            graph_emb = torch.zeros(batch_size, self.lin.in_features)
 
         out = self.lin(graph_emb)
 
         return out
 
+
 class HANConvTrainerGraphLevel:
     """Trainer for graph-level predictions using HAN architecture."""
-    
+
     def __init__(
         self,
         model,
@@ -220,4 +255,3 @@ class HANConvTrainerGraphLevel:
         if self.output_type == "continuous":
             test_mae = self.evaluate_mae(test_loader)
             print("Final test MAE:", test_mae)
-

@@ -8,28 +8,31 @@ import torch
 
 from networkx import Graph
 
-from tree_search.tree_search import Action, TreeSearchCounterFactual
+from tree_search.action import Action
+from tree_search.tree_search import TreeSearchCounterFactual
 from tree_search.feature_helpers import (
     build_object_substitution_features,
     build_event_deletion_features,
-    build_node_attribute_numeric,
+    build_node_attribute_features,
+    construct_attribute_spec_dict,
+)
+from tree_search.feature_selection import (
+    get_nodes_by_importance,
+    get_feature_labels_by_importance,
 )
 
 from gnn.hetero_graph_data import build_hetero_data
-from gnn.utils import Metadata
-from process_execution.process_execution import (
-    extract_process_execution,
-)
+from gnn.utils import Metadata, generate_explanation
+from process_execution.process_execution import extract_process_execution
 from process_execution.utils import build_ocel_dfg
 
 target_activity = "place order"
 viewpoint = "orders"
-backward = False
 y_key = "class"
 dataset_name = f"example_order_management-{viewpoint.replace(' ', '_')}-{y_key.replace(' ', '_')}-pe"
 
 dirname = os.path.dirname(__file__)
-tmp_dir = os.path.join(dirname, "../tmp")
+tmp_dir = os.path.join(dirname, "tmp")
 path_metadata = os.path.join(tmp_dir, f"{dataset_name}-metadata.json")
 path_model = os.path.join(tmp_dir, f"{dataset_name}.pth")
 
@@ -116,12 +119,12 @@ def process_outcome(p: Graph) -> bool:
     data, _, _, _, _, _ = build_hetero_data(
         graph=p,
         node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
         object_type_col=ocel.object_type_column,
         event_activity_col=ocel.event_activity,
-        viewpoint=viewpoint,
+        viewpoint=metadata.viewpoint,
         node_y_mapping={target_process_execution_id: None},
-        activities=metadata.activities,
-        add_reverse_edges=False,
+        normalize=metadata.normalized,
     )
 
     data = data.to(device)
@@ -140,33 +143,75 @@ def process_outcome(p: Graph) -> bool:
 
 # %% Configure counterfactual generation (tree search)
 # Select process execution to generate counterfactual for
-max_change_size = 1
 
-discretized_event_attributes = {}
+num_bins = 2  # number of bins to use for numeric attribute range
+max_change_size = 2
+
+selected_attributes = [
+    "price",
+    # "weight",
+    # "role",
+    "ocel:activity",
+]
+
+attribute_spec_dict = construct_attribute_spec_dict(
+    attributes=selected_attributes,
+    ocel=ocel,
+    node_cat_keys=metadata.node_cat_keys,
+    node_num_keys=metadata.node_num_keys,
+    num_bins=num_bins,
+)
 
 # Extract target process execution
 target_process_execution = extract_process_execution(
     ocel_nx,
     target_process_execution_id,
     ["order", "_items", "packages"],
-    backward=backward,
+    backward=False,
 )
 
 counterfactual_label = not process_outcome(target_process_execution)
 
+target_explanation, feat_label_dict, node_label_dict = generate_explanation(
+    G=target_process_execution,
+    metadata=metadata,
+    model=model,
+    object_type_col=ocel.object_type_column,
+    event_activity_col=ocel.event_activity,
+    verbose=True,
+)
+
+nodes_ordered = [
+    n["label"]
+    for n in get_nodes_by_importance(
+        explanation=target_explanation, node_label_dict=node_label_dict
+    )
+]
+attr_ordered = {
+    node_type: [f["feature"] for f in features]
+    for node_type, features in get_feature_labels_by_importance(
+        explanation=target_explanation,
+        feat_label_dict=feat_label_dict,
+        feature_per_category=metadata.feature_per_category,
+    ).items()
+}
+
 # Features for object node attributes
-object_node_attributes = build_node_attribute_numeric(
+object_node_attributes = build_node_attribute_features(
     target_nodes=target_process_execution.nodes(data=True),
-    selected_event_attributes=discretized_event_attributes,
+    attribute_spec_dict=attribute_spec_dict,
     node_type="OBJECT",
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
     object_type_column=ocel.object_type_column,
 )
 
 # Object substitution features
+node_data = target_process_execution.nodes(data=True)
 target_nodes_for_subst = (
-    (n, d)
-    for n, d in target_process_execution.nodes(data=True)
-    if d.get("attr", {}).get(ocel.object_type_column, "") in ["products"]
+    (n, node_data[n])
+    for n in nodes_ordered
+    if node_data[n].get("attr", {}).get(ocel.object_type_column, "") in ["products"]
 )
 
 object_substitution_features = build_object_substitution_features(
@@ -174,23 +219,27 @@ object_substitution_features = build_object_substitution_features(
     ocel_nodes=ocel_nx.nodes(data=True),
     graph=target_process_execution,
     object_type_column=ocel.object_type_column,
-    discretized_event_attributes=discretized_event_attributes,
+    attribute_spec_dict=attribute_spec_dict,
 )
 
 # Features for event node attributes
-event_node_attributes = build_node_attribute_numeric(
+event_node_attributes = build_node_attribute_features(
     target_nodes=target_process_execution.nodes(data=True),
-    selected_event_attributes=discretized_event_attributes,
+    attribute_spec_dict=attribute_spec_dict,
     node_type="EVENT",
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
 )
 
 # Events that can be deleted
 event_deletion_features = build_event_deletion_features(
-    target_process_execution.nodes(data=True)
+    target_process_execution.nodes(data=True),
+    nodes_order=nodes_ordered,
 )
 
 available_features = (
-    object_node_attributes + object_substitution_features
+    object_node_attributes
+    # object_substitution_features
     # + event_deletion_features
     # + event_node_attributes
 )

@@ -1,5 +1,5 @@
 from itertools import combinations
-from math import comb
+from math import ceil, comb
 from networkx import NetworkXError
 from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_TYPE
 
@@ -45,6 +45,7 @@ class NodeAttributeNumeric(Feature):
         attribute_name: str,
         value_original: int | float,
         value_step: int | float,
+        value_min: int | float,
         value_max: int | float,
         **kwargs,
     ):
@@ -53,18 +54,21 @@ class NodeAttributeNumeric(Feature):
         self.attribute_name = attribute_name
         self.value_original = value_original
         self.value_step = value_step
+        self.value_min = value_min
         self.value_max = value_max
 
     def __repr__(self) -> str:
         return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
 
     def action_space_size(self):
-        return (self.value_max - self.value_original) / self.value_step
+        return ceil((self.value_max - self.value_original) / self.value_step) + ceil(
+            (self.value_original - self.value_min) / self.value_step
+        )
 
     def action_space(
         self,
-        current_change_value: int | float = 0,
-        max_change_size_delta: int | float = 1,
+        current_change_value: Optional[int | float] = None,
+        max_change_size_delta: Optional[int | float] = 1,
     ) -> Iterable[int | float]:
         """
         Generate possible values for the node attribute feature.
@@ -75,19 +79,44 @@ class NodeAttributeNumeric(Feature):
             Iterable[int | float]: Possible values for the attribute.
         """
         current_change_value = current_change_value if current_change_value else 0
+        change_lower = self.change_size(current_change_value)
+        change_upper = change_lower + max_change_size_delta
 
-        value_current = self.value_original + current_change_value
-        current_change_size = self.change_size(current_change_value)
+        # Decrease
+        change_value = current_change_value
+        if current_change_value <= 0:
+            while True:
+                change_value = (
+                    change_value - self.value_step
+                    if self.value_original + change_value - self.value_step
+                    >= self.value_min
+                    else self.value_min - self.value_original
+                )
 
-        change_value = current_change_size + self.value_step
-        while value_current + change_value <= self.value_max:
-            if (
-                self.change_size(change_value) - current_change_size
-                <= max_change_size_delta
-            ):
-                yield change_value
+                change_size = self.change_size(change_value)
+                if (change_size > change_lower) and (change_size <= change_upper):
+                    yield change_value
 
-            change_value += self.value_step
+                if self.value_original + change_value == self.value_min:
+                    break
+
+        # Increase
+        change_value = current_change_value
+        if current_change_value >= 0:
+            while True:
+                change_value = (
+                    change_value + self.value_step
+                    if self.value_original + change_value + self.value_step
+                    <= self.value_max
+                    else self.value_max - self.value_original
+                )
+
+                change_size = self.change_size(change_value)
+                if (change_size > change_lower) and (change_size <= change_upper):
+                    yield change_value
+
+                if self.value_original + change_value == self.value_max:
+                    break
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
         """
@@ -138,7 +167,7 @@ class NodeAttributeCategorical(Feature):
         return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
 
     def action_space_size(self):
-        return len(self.category_values)
+        return len([v for v in self.category_values if v != self.value_original])
 
     def action_space(
         self,
@@ -153,15 +182,14 @@ class NodeAttributeCategorical(Feature):
         Yields:
             Iterable[str]: Possible values for the attribute.
         """
-        current_change_size = (
+        change_lower = (
             self.change_size(current_change_value) if current_change_value else 0
         )
+        change_upper = change_lower + max_change_size_delta
 
         for change_value in self.category_values:
-            if (
-                self.change_size(change_value) - current_change_size
-                <= max_change_size_delta
-            ):
+            change_size = self.change_size(change_value)
+            if (change_size > change_lower) and (change_size <= change_upper):
                 yield change_value
 
     def apply_change(self, p: ProcessExecution, value: Any) -> ProcessExecution:
@@ -176,10 +204,10 @@ class NodeAttributeCategorical(Feature):
         p.nodes()[self.node_id]["attr"][self.attribute_name] = value
         return p
 
-    def change_size(self, value_change=0):
+    def change_size(self, change_value=0):
         return attribute_diff(
             self.value_original,
-            value_change,
+            change_value,
         )
 
 

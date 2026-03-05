@@ -50,7 +50,10 @@ def get_nodes_by_importance(
 
 
 def get_feature_labels_by_importance(
-    explanation: HeteroExplanation, feat_label_dict: Dict[str, List[str]], top_k=None
+    explanation: HeteroExplanation,
+    feat_label_dict: Dict[str, List[str]],
+    feature_per_category: bool = False,
+    top_k=None,
 ):
     """Return per-node-type feature labels ordered by importance.
 
@@ -67,7 +70,8 @@ def get_feature_labels_by_importance(
             continue
 
         # Expect mask shape [num_nodes, num_features] for per-feature importances
-        if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) == 1):
+        num_feats = explanation.get_node_store(node_type)["x"].size(1)
+        if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
             # No per-feature importance available for this node type
             continue
 
@@ -77,10 +81,24 @@ def get_feature_labels_by_importance(
             f"feat_{i}" for i in range(per_feat.size(0))
         ]
 
-        pairs = []
-        for i, v in enumerate(per_feat.tolist()):
-            fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
-            pairs.append({"feature": fname, "importance": float(v)})
+        if feature_per_category:
+            # group feature importances by base category extracted from label
+            # e.g. 'ocel:activity[Register Customer Order]' -> 'ocel:activity'
+            category_vals: Dict[str, List[float]] = {}
+            for i, v in enumerate(per_feat.tolist()):
+                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                base = fname.split("[")[0] if "[" in fname else fname
+                category_vals.setdefault(base, []).append(v)
+
+            pairs = [
+                {"feature": cat, "importance": float(sum(vals) / len(vals))}
+                for cat, vals in category_vals.items()
+            ]
+        else:
+            pairs = []
+            for i, v in enumerate(per_feat.tolist()):
+                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                pairs.append({"feature": fname, "importance": float(v)})
 
         pairs_sorted = sorted(pairs, key=lambda x: x["importance"], reverse=True)
         out[node_type] = pairs_sorted[:top_k] if top_k is not None else pairs_sorted

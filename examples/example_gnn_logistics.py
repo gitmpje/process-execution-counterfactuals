@@ -1,33 +1,49 @@
 # %% Import dependencies
+import json
 import gzip
 import os
 
-import numpy as np
 import pm4py
 import torch
 
-from collections import Counter
 from networkx import Graph
 
-from tree_search.tree_search import Action
-from tree_search.tree_search_parallel import TreeSearchCounterFactualParallel
-from tree_search.feature import (
-    EventNodeDeletion,
-    NodeAttributeNumeric,
-    ObjectNodeSubstitution,
+from tree_search.action import Action
+from tree_search.tree_search import TreeSearchCounterFactual
+from tree_search.feature_helpers import (
+    build_object_substitution_features,
+    build_event_deletion_features,
+    build_node_attribute_features,
+    construct_attribute_spec_dict,
+)
+from tree_search.feature_selection import (
+    get_nodes_by_importance,
+    get_feature_labels_by_importance,
 )
 
 from gnn.hetero_graph_data import build_hetero_data
-from process_execution.process_execution import (
-    extract_process_execution,
-)
+from gnn.utils import Metadata, generate_explanation
+from process_execution.process_execution import extract_process_execution
 from process_execution.utils import build_ocel_dfg
 
-dirname = os.path.dirname(__file__)
-path_ocel = os.path.join(dirname, "data/ContainerLogistics.json.gz")
+target_activity = "Register Customer Order"
+viewpoint = "Customer Order"
+backward = False
+y_key = "class"
+dataset_name = (
+    f"example_logistics-{viewpoint.replace(' ', '_')}-{y_key.replace(' ', '_')}-pe"
+)
 
+dirname = os.path.dirname(__file__)
 tmp_dir = os.path.join(dirname, "tmp")
-path_model = os.path.join(tmp_dir, "ContainerLogistics_gnn-activities.pth")
+path_pe_dataset = os.path.join(
+    tmp_dir,
+    f"{dataset_name}.pt",
+)
+path_metadata = os.path.join(tmp_dir, f"{dataset_name}-metadata.json")
+path_model = os.path.join(tmp_dir, f"{dataset_name}.pth")
+
+path_ocel = os.path.join(dirname, "data/ContainerLogistics.json.gz")
 
 # Unzip .gz files and store to temporary directory
 for var_path in ["path_ocel", "path_model"]:
@@ -43,210 +59,58 @@ for var_path in ["path_ocel", "path_model"]:
 
     globals()[var_path] = tmp_path
 
-# %% Load OCEL and build DFG with aggregation edges
-target_activities = ["Register Customer Order"]
+# Load metadata
+with open(path_metadata, "r") as f:
+    metadata_dict = json.load(f)
+metadata = Metadata.from_dict(metadata_dict)
 
+# %% Load OCEL and build DFG with aggregation edges
 ocel = pm4py.read_ocel2_json(path_ocel)
 
 ocel_nx = build_ocel_dfg(ocel)
 
-# %% Extract process executions
 # Convert timestamp to epoch
+format_string = "%Y-%m-%d %H:%M:%S"
 for _, attr in ocel_nx.nodes(data="attr"):
     if attr.get("type", "") == "EVENT":
+        # attr["epoch"] = datetime.strptime(
+        #     attr["ocel:timestamp"], format_string
+        # ).timestamp()
         attr["epoch"] = attr["ocel:timestamp"].timestamp()
 
-# Extract events related to target activities
-df_events = ocel.events.copy()
-df_events.set_index(ocel.event_id_column, inplace=True)
-df_relations = ocel.relations.copy()
-df_relations.set_index(ocel.event_id_column, inplace=True)
-df_events_objects = df_events.join(df_relations, rsuffix="_relations")
 
-df_events_objects.set_index(ocel.object_id_column, append=True, inplace=True)
-events_to_trace = df_events_objects[
-    (df_events_objects[ocel.event_activity].isin(target_activities))
-].index.unique()
-
-print(f"Number of events selected: {len(events_to_trace)}")
-
-
-def process_time(trace_graph: Graph):
-    register_events = [
+def process_time(process_execution_graph: Graph, event: str):
+    start_events = [
         d["epoch"]
-        for _, d in trace_graph.nodes(data="attr")
+        for _, d in process_execution_graph.nodes(data="attr")
         if d.get(ocel.event_activity, "") == "Register Customer Order"
     ]
 
-    depart_events = [
+    finish_events = [
         d["epoch"]
-        for _, d in trace_graph.nodes(data="attr")
+        for _, d in process_execution_graph.nodes(data="attr")
         if d.get(ocel.event_activity, "") == "Depart"
     ]
 
-    if not (register_events and depart_events):
+    if not (start_events and finish_events):
         return None
 
-    return max(depart_events) - min(register_events)
-
-
-trace_graphs = {}
-for event, viewpoint_object in events_to_trace:
-    process_execution = extract_process_execution(
-        ocel_nx,
-        event,
-        ["Customer Order", "Handling Unit", "Container", "Transport Document"],
-        # "Register Customer Order",
-        backward=False,
-    )
-    process_execution.construct_node_label()
-    process_execution.construct_edge_label()
-
-    p_time = process_time(process_execution)
-    if not p_time:
-        print(f"Incomplete process execution for {event}")
-        continue
-
-    # Only include process executions with rescheduled container
-    reschedule_container = any(
-        n
-        for n, attr in process_execution.nodes(data="attr")
-        if attr.get("ocel:activity", "") == "Reschedule Container"
-    )
-
-    if not reschedule_container:
-        continue
-
-    trace_graphs[event] = {
-        "process_execution": process_execution,
-        "target_node": event,
-        "process_time": p_time,
-        "viewpoint_object": viewpoint_object,
-        "reschedule_container": reschedule_container,
-    }
-
-
-# Calculate normalized process times
-p_all = []
-for trace_graph in trace_graphs.values():
-    p_all.append(trace_graph["process_time"])
-p_mean = np.mean(p_all)
-p_std = np.std(p_all)
-for trace_graph in trace_graphs.values():
-    trace_graph["process_time_normalized"] = (
-        trace_graph["process_time"] - p_mean
-    ) / p_std
-
-# %% Determine class
-p_65 = np.quantile(p_all, 0.65)
-for trace_graph in trace_graphs.values():
-    trace_graph["class"] = trace_graph["process_time"] < p_65
-
-print("Classes:", Counter([d["class"] for d in trace_graphs.values()]))
-
-# %% Define metadata
-NODE_TYPE_OBJECT = "OBJECT"
-NODE_TYPE_EVENT = "EVENT"
-
-viewpoint = "Customer Order"
-y_key = "class"
-path_dataset = os.path.join(
-    tmp_dir,
-    f"logistics-{viewpoint.replace(' ', '_')}-{y_key.replace(' ', '_')}-activities.pt",
-)
-
-# Define node types
-object_types = list(ocel.objects[ocel.object_type_column].unique())
-event_types = []  # list(ocel.events[ocel.event_activity].unique())
-event_object_types = object_types + event_types
-
-# Define activities
-activities = list(ocel.events[ocel.event_activity].unique())
-
-# Define numeric node attributes
-object_num_keys = {}
-object_num_keys[NODE_TYPE_OBJECT] = ocel.objects.select_dtypes(
-    include=[np.number]
-).columns
-for t in object_types:
-    object_num_keys[t] = (
-        ocel.objects[ocel.objects[ocel.object_type_column] == t]
-        .select_dtypes(include=[np.number])
-        .dropna(axis=1)
-        .columns
-    )
-
-event_num_keys = {}
-event_num_keys[NODE_TYPE_EVENT] = ocel.events.select_dtypes(include=[np.number]).columns
-for t in event_types:
-    event_num_keys[t] = (
-        ocel.events[ocel.events[ocel.event_activity] == t]
-        .select_dtypes(include=[np.number])
-        .columns
-    )
-
-node_num_keys = {
-    NODE_TYPE_OBJECT: object_num_keys,
-    NODE_TYPE_EVENT: event_num_keys,
-}
-
-node_y_mapping = {v["viewpoint_object"]: v[y_key] for v in trace_graphs.values()}
+    return max(finish_events) - min(start_events)
 
 
 # %% Load model and define process outcome function
+
+target_process_execution_id = "reg_co493"
+
 # Load trained model
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = torch.load(path_model, weights_only=False)
 model = model.to(device)
 model.eval()
 
-# %%
-for target_process_execution_id in [
-    k for k, v in trace_graphs.items() if not v["class"]
-]:
-    target_object_node = trace_graphs[target_process_execution_id]["viewpoint_object"]
-
-    @torch.no_grad()
-    def process_outcome(ocel_graph: Graph) -> bool:
-        """Predict the outcome for a single `ProcessExecution` using the loaded GNN model.
-
-        Args:
-            ocel_graph (Graph): The process execution to classify.
-        Returns:
-            float: The predicted value.
-        """
-        hetero_data, _, _, y_nodes = build_hetero_data(
-            ocel_graph,
-            node_num_keys,
-            ocel.object_type_column,
-            ocel.event_activity,
-            viewpoint,
-            activities=activities,
-        )
-        print(target_object_node)
-        mask = torch.zeros(len(y_nodes), dtype=torch.bool)
-        mask[y_nodes.index(target_object_node)] = True
-
-        hetero_data = hetero_data.to(device)
-        out = model(hetero_data.x_dict, hetero_data.edge_index_dict)
-
-        return bool(out[mask].argmax(dim=-1).cpu().item())
-
-    print(target_process_execution_id, process_outcome(ocel_nx))
-
-# %% Configure counterfactual generation (tree search)
-# Select process execution to generate counterfactual for
-target_process_execution_id = "reg_co117"
-max_change_size = 5
-num_workers = 10
-
-selected_attributes = {}
-
-target_object_node = trace_graphs[target_process_execution_id]["viewpoint_object"]
-
 
 @torch.no_grad()
-def process_outcome(ocel_graph: Graph) -> bool:
+def process_outcome(p: Graph) -> bool:
     """Predict the outcome for a single `ProcessExecution` using the loaded GNN model.
 
     Args:
@@ -254,123 +118,173 @@ def process_outcome(ocel_graph: Graph) -> bool:
     Returns:
         float: The predicted value.
     """
-    hetero_data, _, _, y_nodes = build_hetero_data(
-        ocel_graph,
-        node_num_keys,
-        ocel.object_type_column,
-        ocel.event_activity,
-        viewpoint,
-        activities=activities,
+    data, _, _, _, _, _ = build_hetero_data(
+        graph=p,
+        node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
+        object_type_col=ocel.object_type_column,
+        event_activity_col=ocel.event_activity,
+        viewpoint=metadata.viewpoint,
+        normalize=metadata.normalized,
+        feature_per_category=metadata.feature_per_category,
     )
 
-    mask = torch.zeros(len(y_nodes), dtype=torch.bool)
-    mask[y_nodes.index(target_object_node)] = True
+    data = data.to(device)
 
-    hetero_data = hetero_data.to(device)
-    out = model(hetero_data.x_dict, hetero_data.edge_index_dict)
-
-    return bool(out[mask].argmax(dim=-1).cpu().item())
-
-
-print(process_outcome(ocel_nx))
-
-target_process_execution = trace_graphs[target_process_execution_id][
-    "process_execution"
-]
-counterfactual_label = not trace_graphs[target_process_execution_id]["class"]
-
-# Object substitution features
-object_substitution_features = []
-for node_id, node_data in target_process_execution.nodes(data=True):
-    if node_data["attr"].get("type", "") != "OBJECT":
-        continue
-
-    # Only allow substitution of production resources
-    if node_data["attr"].get(ocel.object_type_column, "") != "ProductionResource":
-        continue
-
-    # Select substition resources based on object type and capability
-    substitution_objects = [
-        (subst_id, subst_data)
-        for subst_id, subst_data in ocel_nx.nodes(data=True)
-        if subst_data["attr"].get(ocel.object_type_column, "")
-        == node_data["attr"].get(ocel.object_type_column, "")
-        and subst_data["attr"].get("capability", "")
-        == node_data["attr"].get("capability", "")
-        and subst_id != node_id
-    ]
-
-    object_substitution_features.append(
-        ObjectNodeSubstitution(
-            object_id=node_id,
-            object_data=node_data,
-            substitution_objects=substitution_objects,
-            event_ids=[
-                e
-                for e, _, attr in target_process_execution.in_edges(
-                    node_id, data="attr"
-                )
-                if attr["type"] == "E2O"
-            ],
+    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+    batch_dict = {
+        node_type: torch.zeros(
+            data[node_type].num_nodes if data[node_type] else 0,
+            dtype=torch.long,
+            device=device,
         )
-    )
+        for node_type in metadata.node_types
+    }
+    out = model(data.x_dict, data.edge_index_dict, batch_dict)
 
-# Events that can be deleted
-event_deletion_features = [
-    EventNodeDeletion(deletion_options=[[node_id]])
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "EVENT"
+    return bool(out.argmax(dim=-1).cpu().item())
+
+
+# %% Configure counterfactual generation (tree search)
+# Select process execution to generate counterfactual for
+
+num_bins = 1  # number of bins to use for numeric attribute range
+max_change_size = 10
+node_importance_threshold = 0.0
+attr_importance_threshold = 0.0
+
+selected_attributes = [
+    "Amount of Containers",
+    "Amount of Goods",
+    "Amount of Handling Units",
+    "Status",
+    "ocel:activity",
 ]
 
-# Features for event node attributes
-event_node_attributes = [
-    NodeAttributeNumeric(
-        node_id=node_id,
-        attribute_name=attr_name,
-        value_original=attr[attr_name],
-        value_range=selected_attributes[attr_name],
+attribute_spec_dict = construct_attribute_spec_dict(
+    attributes=selected_attributes,
+    ocel=ocel,
+    node_cat_keys=metadata.node_cat_keys,
+    node_num_keys=metadata.node_num_keys,
+    num_bins=num_bins,
+)
+
+# Extract target process execution
+target_process_execution = extract_process_execution(
+    ocel_nx,
+    target_process_execution_id,
+    [
+        "Customer Order",
+        "Handling Unit",
+        "Container",
+        "Transport Document",
+    ],
+    backward=backward,
+)
+
+target_explanation, feat_label_dict, node_label_dict = generate_explanation(
+    G=target_process_execution,
+    metadata=metadata,
+    model=model,
+    object_type_col=ocel.object_type_column,
+    event_activity_col=ocel.event_activity,
+    verbose=True,
+)
+
+nodes_ordered = [
+    n["label"]
+    for n in get_nodes_by_importance(
+        explanation=target_explanation, node_label_dict=node_label_dict
     )
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "EVENT"
-    for attr_name in attr.keys()
-    if attr_name in selected_attributes
+    if n["importance"] >= node_importance_threshold
 ]
+attr_ordered = {
+    node_type: [
+        f["feature"] for f in features if f["importance"] >= attr_importance_threshold
+    ]
+    for node_type, features in get_feature_labels_by_importance(
+        explanation=target_explanation,
+        feat_label_dict=feat_label_dict,
+        feature_per_category=metadata.feature_per_category,
+    ).items()
+}
+
+counterfactual_label = not process_outcome(target_process_execution)
+
 
 # Features for object node attributes
-object_node_attributes = [
-    NodeAttributeNumeric(
-        node_id=node_id,
-        attribute_name=attr_name,
-        value_original=attr[attr_name],
-        value_range=selected_attributes[attr_name],
-    )
-    for node_id, attr in target_process_execution.nodes(data="attr")
-    if attr.get("type", "") == "OBJECT"
-    for attr_name in attr.keys()
-    if attr_name in selected_attributes
-]
+object_node_attributes = build_node_attribute_features(
+    target_nodes=target_process_execution.nodes(data=True),
+    attribute_spec_dict=attribute_spec_dict,
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
+    node_type="OBJECT",
+    object_type_column=ocel.object_type_column,
+)
+
+# Object substitution features
+target_nodes_for_subst = (
+    (n, target_process_execution.nodes(data=True)[n])
+    for n in nodes_ordered
+    if target_process_execution.nodes(data=True)[n]
+    .get("attr", {})
+    .get(ocel.object_type_column, "")
+    in [""]
+)
+
+object_substitution_features = build_object_substitution_features(
+    target_nodes=target_nodes_for_subst,
+    ocel_nodes=ocel_nx.nodes(data=True),
+    graph=target_process_execution,
+    object_type_column=ocel.object_type_column,
+    attribute_spec_dict=attribute_spec_dict,
+)
+
+# Features for event node attributes
+event_node_attributes = build_node_attribute_features(
+    target_nodes=target_process_execution.nodes(data=True),
+    attribute_spec_dict=attribute_spec_dict,
+    nodes_order=nodes_ordered,
+    attr_order=attr_ordered,
+    node_type="EVENT",
+)
+
+# Events that can be deleted
+event_deletion_features = build_event_deletion_features(
+    target_process_execution.nodes(data=True),
+    nodes_order=nodes_ordered,
+)
 
 available_features = (
     object_node_attributes
-    + object_substitution_features
+    # + object_substitution_features
     + event_deletion_features
-    + event_node_attributes
+    # + event_node_attributes
 )
-for feature in available_features:
-    print(feature)
 print(f"Total number of features: {len(available_features)}")
+selected_features = []
+for feature in available_features:
+    if feature.action_space_size() > 0:
+        print(feature)
+        selected_features.append(feature)
+
+print(f"counterfactual_label={counterfactual_label}")
+print(f"Selected number of features (action space size > 0): {len(selected_features)}")
 
 # %% Run tree search algorithm to find counter factuals
-tree_search = TreeSearchCounterFactualParallel(
+from logging import DEBUG
+
+tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
     max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
-    num_workers=num_workers,
+    log_file="logs/example_gnn_logistics.log",
+    log_level=DEBUG,
 )
 
 selected_actions = tree_search.search_layer(
-    [(Action(), available_features)],
-    ocel_nx,
+    [(Action(), selected_features)],
+    target_process_execution,
 )
 
 # %% Display results
@@ -383,15 +297,13 @@ for selected_action in sorted(
 
 # %% Visualization
 def visualize_trace_graph(
-    identifier: str, output_file_name: str = "figures/target_process_execution.svg"
+    graph: Graph, output_file_name: str = "figures/target_process_execution.svg"
 ):
     from networkx import nx_agraph
     from process_execution.visualization import (
         apply_node_styles_nx,
         apply_edge_styles_nx,
     )
-
-    graph = trace_graphs[identifier]["process_execution"]
 
     apply_node_styles_nx(graph)
     apply_edge_styles_nx(graph)
@@ -400,4 +312,24 @@ def visualize_trace_graph(
     agraph.draw(output_file_name, prog="dot")
 
 
-visualize_trace_graph(target_process_execution_id)
+target_process_execution.construct_node_label()
+target_process_execution.construct_edge_label()
+visualize_trace_graph(target_process_execution)
+
+# %%
+from copy import deepcopy
+
+event_deletion = {f: f.deletion_options[0] for f in event_deletion_features}
+node_attributes_modification = {
+    f: [v for v in f.action_space()][0]
+    for f in object_node_attributes
+    if f.action_space_size() > 0
+}
+a = Action(
+    # event_deletion=event_deletion,
+    node_attributes_modification=node_attributes_modification,
+)
+
+counter_factual_pe = deepcopy(target_process_execution)
+a.apply_changes(counter_factual_pe)
+process_outcome(counter_factual_pe)

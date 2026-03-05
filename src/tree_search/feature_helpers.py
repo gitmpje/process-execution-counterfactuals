@@ -27,7 +27,6 @@ def build_object_substitution_features(
     graph: Graph,
     object_type_column: str,
     check: Callable[[Dict, Dict], bool] = lambda a, b: True,
-    nodes_order: Iterable[Any] = None,
     attribute_spec_dict: Dict[str, Any] = None,
 ) -> List[ObjectNodeSubstitution]:
     """Construct ObjectNodeSubstitution features from target graph nodes.
@@ -55,14 +54,8 @@ def build_object_substitution_features(
     # Normalize ocel_nodes into a list to allow multiple iterations
     ocel_list = list(ocel_nodes)
 
-    # Normalize target nodes into a mapping so we can honor ordering if requested
     target_map = dict(target_nodes)
-    if nodes_order is None:
-        iter_nodes = target_map.items()
-    else:
-        iter_nodes = ((n, target_map.get(n)) for n in nodes_order if n in target_map)
-
-    for node_id, node_data in iter_nodes:
+    for node_id, node_data in target_map.items():
         attr = _extract_attr(node_data)
         if attr.get("type", "") != "OBJECT":
             continue
@@ -108,6 +101,7 @@ def build_object_substitution_features(
 
 def build_event_deletion_features(
     target_nodes: Iterable[Tuple[Any, Any]],
+    nodes_order: Iterable[Any] = None,
 ) -> List[EventNodeDeletion]:
     """Construct EventNodeDeletion features for event nodes.
 
@@ -115,7 +109,11 @@ def build_event_deletion_features(
     may be the attribute dict or a mapping containing an `attr` key.
     """
     features: List[EventNodeDeletion] = []
-    for node_id, node_data in target_nodes:
+    target_map = dict(target_nodes)
+    nodes_order = nodes_order if nodes_order is not None else target_map.keys()
+
+    for node_id in nodes_order:
+        node_data = target_map[node_id]
         attr = _extract_attr(node_data)
         if attr.get("type", "") == "EVENT":
             features.append(EventNodeDeletion(deletion_options=[[node_id]]))
@@ -123,35 +121,19 @@ def build_event_deletion_features(
 
 
 def _parse_value_spec(v):
-    # Accept (step, max) tuples, range objects, numpy arange-like arrays, or lists
-    try:
-        import numpy as _np
-    except Exception:
-        _np = None
+    # Accept (min, max, step) tuples or range objects
 
-    # (step, max)
+    # (min, max, step)
     if (
         isinstance(v, tuple)
-        and len(v) == 2
+        and len(v) == 3
         and all(isinstance(x, (int, float)) for x in v)
     ):
-        return v[0], v[1]
+        return v[0], v[1], v[2]
 
     # range
     if isinstance(v, range):
-        return v.step, v.stop
-
-    # numpy arrays or array-likes
-    if _np is not None and isinstance(v, _np.ndarray):
-        arr = v.tolist()
-        if len(arr) >= 2:
-            step = arr[1] - arr[0]
-            return step, arr[-1] + step
-
-    # list/tuple
-    if isinstance(v, (list, tuple)) and len(v) >= 2:
-        step = v[1] - v[0]
-        return step, v[-1] + step
+        return v.start, v.stop, v.step
 
     raise ValueError(f"Unsupported value specification: {v}")
 
@@ -162,7 +144,7 @@ def build_node_attribute_features(
     node_type: str = "EVENT",
     nodes_order: Iterable[Any] = None,
     attr_order: Dict[str, List[str]] = None,
-    object_type_column: str = None,
+    object_type_column: str = "ocel:type",
 ) -> List:
     """Construct NodeAttributeNumeric and NodeAttributeCategorical features.
 
@@ -187,19 +169,13 @@ def build_node_attribute_features(
             continue
 
         # Determine attribute ordering for this node
-        if attr_order:
+        if attr_order is not None:
             if node_type == "EVENT":
                 ordered_attrs = attr_order.get("EVENT", [])
             else:
-                if object_type_column:
-                    node_obj_type = attr.get(object_type_column, "")
-                    ordered_attrs = attr_order.get(node_obj_type, [])
-                else:
-                    ordered_attrs = []
-        else:
-            ordered_attrs = []
+                node_obj_type = attr.get(object_type_column, "")
+                ordered_attrs = attr_order.get(node_obj_type, [])
 
-        if ordered_attrs:
             attr_iter = (a for a in ordered_attrs if a in attr)
         else:
             attr_iter = (a for a in list(attr.keys()) if a in attribute_spec_dict)
@@ -214,7 +190,7 @@ def build_node_attribute_features(
             try:
                 if (
                     isinstance(spec, (list, tuple))
-                    and len(spec) == 2
+                    and len(spec) == 3
                     and all(isinstance(x, (int, float)) for x in spec)
                 ):
                     is_numeric = True
@@ -223,7 +199,7 @@ def build_node_attribute_features(
 
             if is_numeric:
                 try:
-                    step, vmax = _parse_value_spec(spec)
+                    vmin, vmax, step = _parse_value_spec(spec)
                 except ValueError:
                     continue
                 features.append(
@@ -232,6 +208,7 @@ def build_node_attribute_features(
                         attribute_name=attr_name,
                         value_original=attr.get(attr_name),
                         value_step=step,
+                        value_min=vmin,
                         value_max=vmax,
                     )
                 )
@@ -269,7 +246,7 @@ def construct_attribute_spec_dict(
     """Construct a mapping of attribute -> spec for selected attributes.
 
     - Categorical attributes map to a list of category values (from node_cat_keys).
-    - Numeric attributes map to a tuple `(step, max)` where `step = (max-min)/num_bins`.
+    - Numeric attributes map to a tuple `(max, min, step)` where `step = (max-min)/num_bins`.
 
     The function searches `node_cat_keys` and `node_num_keys` for occurrences of
     each attribute across node types and object/event types. If `node_num_keys`
@@ -341,7 +318,7 @@ def construct_attribute_spec_dict(
             step = 1.0
         else:
             step = (global_max - global_min) / float(max(1, num_bins))
-        specs[attr] = (step, global_max)
+        specs[attr] = (global_min, global_max, step)
 
     # Note: categorical specs (if any) will already have been added above
     return specs

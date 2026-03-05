@@ -7,7 +7,7 @@ from torch_geometric.data import HeteroData
 from typing import Dict, Tuple, Set
 
 
-def construct_graph_dict_multiple_viewpoint_nodes(
+def construct_graph_dict(
     graph: Graph,
     node_num_keys: dict,
     node_cat_keys: dict,
@@ -91,7 +91,11 @@ def construct_graph_dict_multiple_viewpoint_nodes(
                     try:
                         if unique_vals:
                             raw_idx = int(unique_vals.index(val))
-                            if normalize and len(unique_vals) > 1 and not feature_per_category:
+                            if (
+                                normalize
+                                and len(unique_vals) > 1
+                                and not feature_per_category
+                            ):
                                 idx = float(raw_idx) / float(len(unique_vals) - 1)
                             else:
                                 idx = int(raw_idx)
@@ -104,7 +108,7 @@ def construct_graph_dict_multiple_viewpoint_nodes(
                     col_x = [0] * len(unique_vals)
                     col_x[idx] = 1
                     node_feats.extend(col_x)
-                    feat_labels.extend(unique_vals)
+                    feat_labels.extend([f"{col}[{v}]" for v in unique_vals])
                 else:
                     node_feats.append(idx)
                     feat_labels.append(col)
@@ -169,10 +173,11 @@ def build_hetero_data(
     add_reverse_edges: bool = False,
     path_dataset: str = None,
     normalize: bool = False,
+    feature_per_category: bool = False,
 ) -> Tuple[HeteroData, Set[str], Set[str]]:
     hetero_data = HeteroData()
     graph_dict, node_types, edge_types, feat_label_dict, node_label_dict = (
-        construct_graph_dict_multiple_viewpoint_nodes(
+        construct_graph_dict(
             graph=graph,
             node_num_keys=node_num_keys,
             node_cat_keys=node_cat_keys,
@@ -182,6 +187,7 @@ def build_hetero_data(
             node_y_mapping=node_y_mapping,
             add_reverse_edges=add_reverse_edges,
             normalize=normalize,
+            feature_per_category=feature_per_category,
         )
     )
 
