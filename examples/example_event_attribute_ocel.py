@@ -8,7 +8,7 @@ from networkx import Graph
 from tree_search.action import Action
 from tree_search.feature_helpers import (
     build_object_substitution_features,
-    build_event_deletion_features,
+    build_node_deletion_features,
     build_node_attribute_features,
     construct_attribute_spec_dict,
 )
@@ -148,7 +148,7 @@ object_substitution_features = build_object_substitution_features(
 )
 
 # Events that can be deleted
-event_deletion_features = build_event_deletion_features(
+node_deletion_features = build_node_deletion_features(
     target_process_execution.nodes(data=True)
 )
 

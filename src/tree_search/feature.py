@@ -310,9 +310,9 @@ class ObjectNodeSubstitution(Feature):
         )
 
 
-class EventNodeDeletion(Feature):
+class NodeDeletion(Feature):
     """
-    Feature representing possible event node deletions from a process execution.
+    Feature representing possible node deletions from a process execution.
     Attributes:
         deletion_options (Optional[Iterable[List[str]]]):
             An iterable of deletion options, where each deletion option is a list of nodes identifiers.
@@ -354,7 +354,7 @@ class EventNodeDeletion(Feature):
         max_change_size_delta: int | float = 1,
     ) -> Iterable[List[str]]:
         """
-        Generate possible deletion options for the object node feature.
+        Generate possible deletion options.
         Args:
             current_change_value (Optional[List[str]]): Current change value.
             max_change_size_delta (int | float): Upper bound on the delta of the change size.
@@ -399,6 +399,30 @@ class EventNodeDeletion(Feature):
         p: ProcessExecution,
         deletions: List[str],
     ) -> ProcessExecution:
+        ...
+
+class EventNodeDeletion(NodeDeletion):
+    """
+    Feature representing possible event node deletions from a process execution.
+    Attributes:
+        deletion_options (Optional[Iterable[List[str]]]):
+            An iterable of deletion options, where each deletion option is a list of nodes identifiers.
+        allowed_deletions (Optional[List[str]]):
+            A list of node identifiers that can be deleted.
+    """
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+    def apply_change(
+        self,
+        p: ProcessExecution,
+        deletions: List[str],
+    ) -> ProcessExecution:
         for deletion_node_id in deletions:
             # Add DF edges to 'skip' deletion node
             edges = []
@@ -419,5 +443,34 @@ class EventNodeDeletion(Feature):
 
             # Add edges
             p.add_edges_from(edges)
+
+        return p
+
+
+class ObjectNodeDeletion(NodeDeletion):
+    """
+    Feature representing possible object node deletions from a process execution.
+    Attributes:
+        deletion_options (Optional[Iterable[List[str]]]):
+            An iterable of deletion options, where each deletion option is a list of nodes identifiers.
+        allowed_deletions (Optional[List[str]]):
+            A list of node identifiers that can be deleted.
+    """
+
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+    def apply_change(
+        self,
+        p: ProcessExecution,
+        deletions: List[str],
+    ) -> ProcessExecution:
+        for deletion_node_id in deletions:
+            # Remove node
+            p.remove_node(deletion_node_id)
 
         return p

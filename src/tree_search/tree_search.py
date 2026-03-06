@@ -97,10 +97,14 @@ class TreeSearchCounterFactual:
         next_actions = []
         selected_actions = []
         features_no_change = []
+        explored_features = []
         for feature in features:
+            explored_features.append(feature)
             current_change_value = action.get_change_value(feature)
 
-            next_features = {f for f in features if f != feature}
+            # Only explore features that have not been explored in this layer yet
+            # as the order of features does not matter
+            next_features = {f for f in features if f not in explored_features}
             explored_feature = False
             for change_value in feature.action_space(
                 current_change_value, max_change_size_delta

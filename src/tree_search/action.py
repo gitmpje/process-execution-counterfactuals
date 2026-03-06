@@ -6,6 +6,7 @@ from tree_search.feature import (
     EventNodeDeletion,
     Feature,
     NodeAttributeNumeric,
+    ObjectNodeDeletion,
     ObjectNodeSubstitution,
 )
 
@@ -13,20 +14,20 @@ class Action:
     """
     Class representing a set of changes (actions) to be applied to a process execution.
     Attributes:
-        event_deletion (List[str]): List of event IDs to remove.
+        node_deletion (List[str]): List of node IDs to remove.
         object_substitution (Dict[ObjectSubstitutions, List[Tuple[Tuple[str, dict], Tuple[str, dict]]]): Dictionary mapping object substitutions options to the selected substitutions.
         node_attributes_modification (Dict[NodeAttributeNumeric, Any]): Dictionary mapping node attribute features to their change value.
     """
 
     def __init__(
         self,
-        event_deletion: Dict[EventNodeDeletion, List[str]] = None,
+        node_deletion: Dict[EventNodeDeletion, List[str]] = None,
         object_substitution: Dict[
             ObjectNodeSubstitution, Tuple[str, dict] | None
         ] = None,
         node_attributes_modification: Dict[NodeAttributeNumeric, Any] = None,
     ):
-        self.event_deletion = event_deletion if event_deletion else {}
+        self.node_deletion = node_deletion if node_deletion else {}
         self.object_substitution = object_substitution if object_substitution else {}
         self.node_attributes_modification = (
             node_attributes_modification if node_attributes_modification else {}
@@ -36,7 +37,7 @@ class Action:
         object_substitution = {k: v[0] for k, v in self.object_substitution.items()}
 
         return f"""Action<{id(self)}>
-    event_deletion: {self.event_deletion}
+    node_deletion: {self.node_deletion}
     object_substitution: {object_substitution}
     node_attributes_modification: {self.node_attributes_modification}"""
 
@@ -45,7 +46,7 @@ class Action:
         Make a shallow copy of this object.
         """
         new_obj = type(self)(
-            event_deletion={k: v for k, v in self.event_deletion.items()},
+            node_deletion={k: v for k, v in self.node_deletion.items()},
             object_substitution={k: v for k, v in self.object_substitution.items()},
             node_attributes_modification={
                 k: v for k, v in self.node_attributes_modification.items()
@@ -56,13 +57,13 @@ class Action:
     def __eq__(self, other):
         """
         Equality check for Action objects.
-        Two Actions are equal if they are the same type and their event_deletion,
+        Two Actions are equal if they are the same type and their node_deletion,
         object_substitution, and node_attributes_modification dictionaries are equal.
         """
         if not isinstance(other, Action):
             return NotImplemented
         return (
-            self.event_deletion == other.event_deletion
+            self.node_deletion == other.node_deletion
             and self.object_substitution == other.object_substitution
             and self.node_attributes_modification == other.node_attributes_modification
         )
@@ -70,13 +71,13 @@ class Action:
     def __ne__(self, other):
         """
         Inequality check for Action objects.
-        Two Actions are not equal if their event_deletion,
+        Two Actions are not equal if their node_deletion,
         object_substitution, or node_attributes_modification dictionaries are different.
         """
         if not isinstance(other, Action):
             return NotImplemented
         return (
-            self.event_deletion != other.event_deletion
+            self.node_deletion != other.node_deletion
             or self.object_substitution != other.object_substitution
             or self.node_attributes_modification != other.node_attributes_modification
         )
@@ -89,8 +90,8 @@ class Action:
         Returns:
             Any: The current change value for the feature.
         """
-        if isinstance(feature, EventNodeDeletion):
-            return self.event_deletion.get(feature)
+        if isinstance(feature, (EventNodeDeletion, ObjectNodeDeletion)):
+            return self.node_deletion.get(feature)
         elif isinstance(feature, NodeAttributeNumeric):
             return self.node_attributes_modification.get(feature)
         elif isinstance(feature, ObjectNodeSubstitution):
@@ -105,8 +106,8 @@ class Action:
             feature (Feature): The feature for which to set the change value.
             value (Any): The new value to set for the feature.
         """
-        if isinstance(feature, EventNodeDeletion):
-            self.event_deletion[feature] = value
+        if isinstance(feature, (EventNodeDeletion, ObjectNodeDeletion)):
+            self.node_deletion[feature] = value
         elif isinstance(feature, NodeAttributeNumeric):
             self.node_attributes_modification[feature] = value
         elif isinstance(feature, ObjectNodeSubstitution):
@@ -122,7 +123,7 @@ class Action:
         """
         deletion_size = sum(
             feature.change_size(del_nodes=del_nodes)
-            for feature, del_nodes in self.event_deletion.items()
+            for feature, del_nodes in self.node_deletion.items()
         )
 
         substitution_size = sum(
@@ -147,7 +148,7 @@ class Action:
         ]
 
         return (
-            len(self.event_deletion)
+            len(self.node_deletion)
             + len(
                 [
                     obj_id
@@ -173,7 +174,7 @@ class Action:
         for feature, value in self.node_attributes_modification.items():
             feature.apply_change(p, value)
 
-        for feature, deletion in self.event_deletion.items():
+        for feature, deletion in self.node_deletion.items():
             if deletion:
                 feature.apply_change(p, deletion)
 

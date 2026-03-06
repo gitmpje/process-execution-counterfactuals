@@ -267,7 +267,7 @@ for node_id, node_data in target_process_execution.nodes(data=True):
     )
 
 # Events that can be deleted
-event_deletion_features = [
+node_deletion_features = [
     EventNodeDeletion(deletion_options=[[node_id]])
     for node_id, attr in target_process_execution.nodes(data="attr")
     if attr.get("type", "") == "EVENT"
@@ -301,7 +301,7 @@ object_node_attributes = [
     if attr_name in selected_attributes
 ]
 
-available_features = object_node_attributes  # object_substitution_features + event_deletion_features + event_node_attributes
+available_features = object_node_attributes  # object_substitution_features + node_deletion_features + event_node_attributes
 for feature in available_features:
     print(feature)
 print(f"Total number of features: {len(available_features)}")

@@ -6,6 +6,7 @@ from tree_search.feature import (
     EventNodeDeletion,
     NodeAttributeCategorical,
     NodeAttributeNumeric,
+    ObjectNodeDeletion,
     ObjectNodeSubstitution,
 )
 
@@ -99,16 +100,18 @@ def build_object_substitution_features(
     return features
 
 
-def build_event_deletion_features(
+def build_node_deletion_features(
     target_nodes: Iterable[Tuple[Any, Any]],
     nodes_order: Iterable[Any] = None,
+    viewpoint: str = None,
+    object_type_column: str = "",
 ) -> List[EventNodeDeletion]:
-    """Construct EventNodeDeletion features for event nodes.
+    """Construct EventNodeDeletion or ObjectNodeDeletion features for respectively event and object nodes.
 
     Expects `target_nodes` as an iterable of (node_id, node_data) where node_data
     may be the attribute dict or a mapping containing an `attr` key.
     """
-    features: List[EventNodeDeletion] = []
+    features: List[EventNodeDeletion | ObjectNodeDeletion] = []
     target_map = dict(target_nodes)
     nodes_order = nodes_order if nodes_order is not None else target_map.keys()
 
@@ -117,6 +120,11 @@ def build_event_deletion_features(
         attr = _extract_attr(node_data)
         if attr.get("type", "") == "EVENT":
             features.append(EventNodeDeletion(deletion_options=[[node_id]]))
+        elif attr.get("type", "") == "OBJECT":
+            # Skip viewpoint nodes
+            if attr.get(object_type_column, "") == viewpoint:
+                continue
+            features.append(ObjectNodeDeletion(deletion_options=[[node_id]]))
     return features
 
 
@@ -326,7 +334,7 @@ def construct_attribute_spec_dict(
 
 __all__ = [
     "build_object_substitution_features",
-    "build_event_deletion_features",
+    "build_node_deletion_features",
     "build_node_attribute_features",
     "construct_attribute_spec_dict",
 ]

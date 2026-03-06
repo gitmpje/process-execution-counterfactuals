@@ -12,7 +12,7 @@ from tree_search.action import Action
 from tree_search.tree_search import TreeSearchCounterFactual
 from tree_search.feature_helpers import (
     build_object_substitution_features,
-    build_event_deletion_features,
+    build_node_deletion_features,
     build_node_attribute_features,
     construct_attribute_spec_dict,
 )
@@ -73,30 +73,7 @@ ocel_nx = build_ocel_dfg(ocel)
 format_string = "%Y-%m-%d %H:%M:%S"
 for _, attr in ocel_nx.nodes(data="attr"):
     if attr.get("type", "") == "EVENT":
-        # attr["epoch"] = datetime.strptime(
-        #     attr["ocel:timestamp"], format_string
-        # ).timestamp()
         attr["epoch"] = attr["ocel:timestamp"].timestamp()
-
-
-def process_time(process_execution_graph: Graph, event: str):
-    start_events = [
-        d["epoch"]
-        for _, d in process_execution_graph.nodes(data="attr")
-        if d.get(ocel.event_activity, "") == "Register Customer Order"
-    ]
-
-    finish_events = [
-        d["epoch"]
-        for _, d in process_execution_graph.nodes(data="attr")
-        if d.get(ocel.event_activity, "") == "Depart"
-    ]
-
-    if not (start_events and finish_events):
-        return None
-
-    return max(finish_events) - min(start_events)
-
 
 # %% Load model and define process outcome function
 
@@ -150,7 +127,7 @@ def process_outcome(p: Graph) -> bool:
 
 num_bins = 1  # number of bins to use for numeric attribute range
 max_change_size = 10
-node_importance_threshold = 0.0
+node_importance_threshold = 0.1
 attr_importance_threshold = 0.0
 
 selected_attributes = [
@@ -250,15 +227,17 @@ event_node_attributes = build_node_attribute_features(
 )
 
 # Events that can be deleted
-event_deletion_features = build_event_deletion_features(
+node_deletion_features = build_node_deletion_features(
     target_process_execution.nodes(data=True),
     nodes_order=nodes_ordered,
+    viewpoint=metadata.viewpoint,
+    object_type_column=ocel.object_type_column,
 )
 
 available_features = (
     object_node_attributes
     # + object_substitution_features
-    + event_deletion_features
+    + node_deletion_features
     # + event_node_attributes
 )
 print(f"Total number of features: {len(available_features)}")
@@ -312,24 +291,36 @@ def visualize_trace_graph(
     agraph.draw(output_file_name, prog="dot")
 
 
-target_process_execution.construct_node_label()
-target_process_execution.construct_edge_label()
+# target_process_execution.construct_node_label()
+# target_process_execution.construct_edge_label()
 visualize_trace_graph(target_process_execution)
+
 
 # %%
 from copy import deepcopy
+from tree_search.feature import NodeAttributeNumeric
 
-event_deletion = {f: f.deletion_options[0] for f in event_deletion_features}
+print(process_outcome(target_process_execution))
+
+counterfactual_pe = deepcopy(target_process_execution)
 node_attributes_modification = {
-    f: [v for v in f.action_space()][0]
+    f: min([v for v in f.action_space()])
     for f in object_node_attributes
-    if f.action_space_size() > 0
+    if isinstance(f, NodeAttributeNumeric)
 }
-a = Action(
-    # event_deletion=event_deletion,
-    node_attributes_modification=node_attributes_modification,
+node_attributes_modification.update(
+    {f: f.category_values[0] for f in event_node_attributes}
 )
 
-counter_factual_pe = deepcopy(target_process_execution)
-a.apply_changes(counter_factual_pe)
-process_outcome(counter_factual_pe)
+node_deletion = {f: [v for v in f.action_space()][0] for f in node_deletion_features}
+
+a = Action(
+    node_attributes_modification=node_attributes_modification,
+    node_deletion=node_deletion,
+)
+
+a.apply_changes(counterfactual_pe)
+print(a.action_size())
+print(process_outcome(counterfactual_pe))
+
+visualize_trace_graph(counterfactual_pe, "figures/counterfactual_pe.svg")

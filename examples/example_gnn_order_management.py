@@ -12,7 +12,7 @@ from tree_search.action import Action
 from tree_search.tree_search import TreeSearchCounterFactual
 from tree_search.feature_helpers import (
     build_object_substitution_features,
-    build_event_deletion_features,
+    build_node_deletion_features,
     build_node_attribute_features,
     construct_attribute_spec_dict,
 )
@@ -232,7 +232,7 @@ event_node_attributes = build_node_attribute_features(
 )
 
 # Events that can be deleted
-event_deletion_features = build_event_deletion_features(
+node_deletion_features = build_node_deletion_features(
     target_process_execution.nodes(data=True),
     nodes_order=nodes_ordered,
 )
@@ -240,7 +240,7 @@ event_deletion_features = build_event_deletion_features(
 available_features = (
     object_node_attributes
     # object_substitution_features
-    # + event_deletion_features
+    # + node_deletion_features
     # + event_node_attributes
 )
 for feature in available_features:
