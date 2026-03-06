@@ -26,7 +26,21 @@ class Feature:
 
     def __init__(
         self,
-    ): ...
+    ):
+        ...
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+        if type(self) is not type(other):
+            return False
+
+        return self.__dict__ == other.__dict__
+
+    def __hash__(self):
+        # Subclasses should provide a reasonable __repr__ implementation
+        # that reflects the important attributes.
+        return hash(repr(self))
 
 
 class NodeAttributeNumeric(Feature):

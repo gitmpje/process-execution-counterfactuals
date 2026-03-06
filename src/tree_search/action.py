@@ -6,6 +6,7 @@ from tree_search.feature import (
     EventNodeDeletion,
     Feature,
     NodeAttributeNumeric,
+    NodeAttributeCategorical,
     ObjectNodeDeletion,
     ObjectNodeSubstitution,
 )
@@ -92,12 +93,12 @@ class Action:
         """
         if isinstance(feature, (EventNodeDeletion, ObjectNodeDeletion)):
             return self.node_deletion.get(feature)
-        elif isinstance(feature, NodeAttributeNumeric):
+        elif isinstance(feature, (NodeAttributeNumeric, NodeAttributeCategorical)):
             return self.node_attributes_modification.get(feature)
         elif isinstance(feature, ObjectNodeSubstitution):
             return self.object_substitution.get(feature)
         else:
-            NotImplementedError(f"Feature of type {type(feature)} is not supported")
+            raise NotImplementedError(f"Feature of type {type(feature)} is not supported")
 
     def set_change_value(self, feature: Feature, value: Any):
         """
@@ -108,12 +109,12 @@ class Action:
         """
         if isinstance(feature, (EventNodeDeletion, ObjectNodeDeletion)):
             self.node_deletion[feature] = value
-        elif isinstance(feature, NodeAttributeNumeric):
+        elif isinstance(feature, (NodeAttributeNumeric, NodeAttributeCategorical)):
             self.node_attributes_modification[feature] = value
         elif isinstance(feature, ObjectNodeSubstitution):
             self.object_substitution[feature] = value
         else:
-            NotImplementedError(f"Feature of type {type(feature)} is not supported")
+            raise NotImplementedError(f"Feature of type {type(feature)} is not supported")
 
     def action_size(self) -> int:
         """

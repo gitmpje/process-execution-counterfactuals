@@ -51,19 +51,6 @@ class TreeSearchCounterFactual:
 
         self.logger = self._configure_logger()
 
-    def select_feature(self, available_features: List[Feature]) -> Feature | None:
-        """
-        Select the next feature to consider from the available features.
-        Args:
-            available_features (List[Feature]): List of available features to select from.
-        Returns:
-            Feature: The selected feature, or None if no features are available.
-        """
-        try:
-            return available_features.pop(0)
-        except IndexError:
-            return None
-
     def maximum_number_of_actions(
         self,
         available_features: List[Feature],

@@ -25,3 +25,6 @@ packages = ["src/tree_search", "src/gnn", "src/process_execution"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/**"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
