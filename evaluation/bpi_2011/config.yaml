@@ -1,0 +1,6 @@
+dataset:
+  path_xes: "data/Hospital_log.xes.gz"
+  path_dataset: "data/dataset-pe.pt"
+  path_metadata: "data/metadata-pe.json"
+  path_model: "data/model-pe.pth"
+  viewpoint: "case:concept:name"
