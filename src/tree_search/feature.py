@@ -42,6 +42,20 @@ class Feature:
         # that reflects the important attributes.
         return hash(repr(self))
 
+    def apply_change(self, p: ProcessExecution) -> ProcessExecution:
+        """
+        Apply the change represented by this feature to the process execution `p`.
+        """
+        raise NotImplementedError("apply_change must be implemented by subclasses")
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        """
+        Reverse a previously applied change using the information stored in
+        `record`. Subclasses must override when they modify the graph in a
+        nontrivial way.
+        """
+        raise NotImplementedError("undo_change must be implemented by subclasses")
+
 
 class NodeAttributeNumeric(Feature):
     """
@@ -132,17 +146,20 @@ class NodeAttributeNumeric(Feature):
                 if self.value_original + change_value == self.value_max:
                     break
 
-    def apply_change(self, p: ProcessExecution, delta_value: Any) -> ProcessExecution:
+    def apply_change(self, p: ProcessExecution, delta_value: Any) -> Any:
         """
-        Apply the attribute value change to the process execution.
+        Apply the attribute value change to the process execution and return the
+        original value so that the operation can be undone later.
         Args:
             p (ProcessExecution): The process execution to modify.
             delta_value (Any): The value to add to the current attribute value.
         Returns:
-            ProcessExecution: The modified process execution.
+            Any: the previous attribute value (undo record).
         """
-        p.nodes()[self.node_id]["attr"][self.attribute_name] += delta_value
-        return p
+        node = p.nodes()[self.node_id]
+        old = node["attr"][self.attribute_name]
+        node["attr"][self.attribute_name] = old + delta_value
+        return old
 
     def change_size(self, change_value=0):
         return attribute_diff_numeric(
@@ -150,6 +167,12 @@ class NodeAttributeNumeric(Feature):
             self.value_original + change_value,
             interval_size=self.value_step,
         )
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # record holds the original value
+        if p.has_node(self.node_id):
+            p.nodes()[self.node_id]["attr"][self.attribute_name] = record
+        return p
 
 
 class NodeAttributeCategorical(Feature):
@@ -206,23 +229,31 @@ class NodeAttributeCategorical(Feature):
             if (change_size > change_lower) and (change_size <= change_upper):
                 yield change_value
 
-    def apply_change(self, p: ProcessExecution, value: Any) -> ProcessExecution:
+    def apply_change(self, p: ProcessExecution, value: Any) -> Any:
         """
-        Apply the attribute value change to the process execution.
+        Apply the attribute value change to the process execution and return the
+        original value so that undoing is possible.
         Args:
             p (ProcessExecution): The process execution to modify.
-            delta_value (Any): The value to change the attribute value to.
+            value (Any): The value to set the attribute to.
         Returns:
-            ProcessExecution: The modified process execution.
+            Any: the previous attribute value.
         """
-        p.nodes()[self.node_id]["attr"][self.attribute_name] = value
-        return p
+        node = p.nodes()[self.node_id]
+        old = node["attr"][self.attribute_name]
+        node["attr"][self.attribute_name] = value
+        return old
 
     def change_size(self, change_value=0):
         return attribute_diff(
             self.value_original,
             change_value,
         )
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        if p.has_node(self.node_id):
+            p.nodes()[self.node_id]["attr"][self.attribute_name] = record
+        return p
 
 
 class ObjectNodeSubstitution(Feature):
@@ -282,9 +313,26 @@ class ObjectNodeSubstitution(Feature):
         self,
         p: ProcessExecution,
         substitution_object: Tuple[str, dict],
-    ) -> ProcessExecution:
+    ) -> dict:
+        """
+        Apply the object substitution and return a small snapshot of the graph
+        state that is necessary to undo the operation.
+        """
         subst_object_id = substitution_object[0]
         subst_object_attr = substitution_object[1]
+
+        # snapshot nodes/edges involving the two object IDs before modification
+        record: dict = {"nodes": {}, "edges": [], "had_subst": False}
+        for nid in (self.object_id, subst_object_id):
+            if p.has_node(nid):
+                record["nodes"][nid] = p.nodes[nid].copy()
+        record["had_subst"] = p.has_node(subst_object_id)
+        record["edges"] = [
+            (u, v, k, d.copy())
+            for u, v, k, d in p.edges(keys=True, data=True)
+            if u in {self.object_id, subst_object_id}
+            or v in {self.object_id, subst_object_id}
+        ]
 
         # Add object node if not exists
         if not p.nodes.get(subst_object_id):
@@ -311,7 +359,7 @@ class ObjectNodeSubstitution(Feature):
             except NetworkXError:
                 print(f"{self.object_id} does not exist in the graph.")
 
-        return p
+        return record
 
     def change_size(self, subst_node: Tuple[str, dict] = None):
         subst_node_data = subst_node[1] if subst_node else {}
@@ -322,6 +370,40 @@ class ObjectNodeSubstitution(Feature):
             aggregation_type="sum",
             discretized_attributes=self.discretized_attributes,
         )
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # restore nodes/edges snapshot saved before substitution
+        # first, remove edges involving the two object ids
+        ids = {self.object_id}
+        # if substitution object was added, we need its id too
+        # record may not have had it explicitly but edges snapshot contains both ids
+        ids |= set(record.get("nodes", {}).keys())
+        for u, v, k, _ in list(p.edges(keys=True, data=True)):
+            if u in ids or v in ids:
+                try:
+                    p.remove_edge(u, v, key=k)
+                except Exception:
+                    pass
+        # restore nodes attrs
+        for nid, attrs in record.get("nodes", {}).items():
+            if not p.has_node(nid):
+                p.add_node(nid, **attrs)
+            else:
+                p.nodes()[nid].update(attrs)
+        # restore edges
+        for u, v, k, d in record.get("edges", []):
+            if not p.has_edge(u, v, key=k):
+                p.add_edge(u, v, key=k, **d)
+        # remove substitution node if it was created by the change
+        subst_id = list(set(record.get("nodes", {}).keys()) - {self.object_id})
+        if subst_id and not record.get("had_subst"):
+            nid = subst_id[0]
+            if p.has_node(nid):
+                try:
+                    p.remove_node(nid)
+                except Exception:
+                    pass
+        return p
 
 
 class NodeDeletion(Feature):
@@ -408,38 +490,69 @@ class NodeDeletion(Feature):
         else:
             return 0
 
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # re‑add deleted nodes and edges, remove any edges that were inserted
+        for node_id, attrs in record.get("deleted_nodes", []):
+            if not p.has_node(node_id):
+                p.add_node(node_id, **attrs)
+            else:
+                p.nodes()[node_id].update(attrs)
+        for u, v, k, d in record.get("deleted_edges", []):
+            if not p.has_edge(u, v, key=k):
+                p.add_edge(u, v, key=k, **d)
+        for u, v, k, _ in record.get("added_edges", []):
+            if p.has_edge(u, v, key=k):
+                try:
+                    p.remove_edge(u, v, key=k)
+                except Exception:
+                    pass
+        return p
+
     def apply_change(
         self,
         p: ProcessExecution,
         deletions: List[str],
-    ) -> ProcessExecution:
-        ...
+    ) -> dict:
+        """
+        Remove the requested nodes, recording their attributes and incident
+        edges so they can be restored later.
+        Returns a dict with ``deleted_nodes`` and ``deleted_edges`` plus any
+        ``added_edges`` that were created during event‑node deletion.
+        """
+        record = {"deleted_nodes": [], "deleted_edges": [], "added_edges": []}
+        for deletion_node_id in deletions:
+            # capture node data
+            if p.has_node(deletion_node_id):
+                record["deleted_nodes"].append(
+                    (deletion_node_id, p.nodes()[deletion_node_id].copy())
+                )
+                # capture any incident edges (both in and out)
+                record["deleted_edges"].extend(
+                    [(u, v, k, d.copy()) for u, v, k, d in p.edges(
+                        nbunch=[deletion_node_id], keys=True, data=True
+                    )]
+                )
+                p.remove_node(deletion_node_id)
+        return record
 
 class EventNodeDeletion(NodeDeletion):
     """
     Feature representing possible event node deletions from a process execution.
-    Attributes:
-        deletion_options (Optional[Iterable[List[str]]]):
-            An iterable of deletion options, where each deletion option is a list of nodes identifiers.
-        allowed_deletions (Optional[List[str]]):
-            A list of node identifiers that can be deleted.
-    """
 
-    def __init__(
-        self,
-        *args,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
+    Records the nodes/edges removed and any skip‑edges that are added so that
+    the operation can be undone.
+    """
 
     def apply_change(
         self,
         p: ProcessExecution,
         deletions: List[str],
-    ) -> ProcessExecution:
+    ) -> dict:
+        base_rec = super().apply_change(p, deletions)
+
+        # identify added "skip" edges so they can be removed on undo
+        added = []
         for deletion_node_id in deletions:
-            # Add DF edges to 'skip' deletion node
-            edges = []
             target_df_events = [
                 v
                 for _, v, d in p.out_edges(deletion_node_id, data=True)
@@ -448,43 +561,33 @@ class EventNodeDeletion(NodeDeletion):
             for u, _, d in p.in_edges(deletion_node_id, data=True):
                 if d["attr"]["type"] != "DF":
                     continue
-                edges.extend(
+                added.extend(
                     [(u, target_event, d) for target_event in target_df_events]
                 )
+        base_rec["added_edges"] = added
+        return base_rec
 
-            # Remove node
-            p.remove_node(deletion_node_id)
-
-            # Add edges
-            p.add_edges_from(edges)
-
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # reuse NodeDeletion undo and then remove any added edges as recorded
+        p = super().undo_change(p, record)
+        for u, v, k, _ in record.get("added_edges", []):
+            if p.has_edge(u, v, key=k):
+                try:
+                    p.remove_edge(u, v, key=k)
+                except Exception:
+                    pass
         return p
 
 
 class ObjectNodeDeletion(NodeDeletion):
-    """
-    Feature representing possible object node deletions from a process execution.
-    Attributes:
-        deletion_options (Optional[Iterable[List[str]]]):
-            An iterable of deletion options, where each deletion option is a list of nodes identifiers.
-        allowed_deletions (Optional[List[str]]):
-            A list of node identifiers that can be deleted.
-    """
-
-    def __init__(
-        self,
-        *args,
-        **kwargs,
-    ):
-        super().__init__(*args, **kwargs)
-
     def apply_change(
         self,
         p: ProcessExecution,
         deletions: List[str],
-    ) -> ProcessExecution:
-        for deletion_node_id in deletions:
-            # Remove node
-            p.remove_node(deletion_node_id)
+    ) -> dict:
+        # base deletion collects removed nodes/edges; nothing special to add here
+        return super().apply_change(p, deletions)
 
-        return p
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # same logic as base class
+        return super().undo_change(p, record)

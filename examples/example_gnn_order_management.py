@@ -125,6 +125,7 @@ def process_outcome(p: Graph) -> bool:
         viewpoint=metadata.viewpoint,
         node_y_mapping={target_process_execution_id: None},
         normalize=metadata.normalized,
+        feature_per_category=metadata.feature_per_category,
     )
 
     data = data.to(device)

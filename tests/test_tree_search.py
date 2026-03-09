@@ -105,8 +105,12 @@ def test_action_size_objective_and_apply(simple_process_execution, numeric_featu
     assert a.objective_value() == 1
 
     p = simple_process_execution
-    a.apply_changes(p)
-    assert p.nodes()["n1"]["attr"]["x"] == 1
+    p_after, rec = a.apply_changes(p)
+    assert p_after.nodes()["n1"]["attr"]["x"] == 1
+
+    # undo should restore original value
+    a.undo_changes(p_after, rec)
+    assert p_after.nodes()["n1"]["attr"]["x"] == 0
 
 
 def test_action_apply_multiple_feature_types(
@@ -120,9 +124,13 @@ def test_action_apply_multiple_feature_types(
         -1
     ) + categorical_feature.change_size("blue")
     p = simple_process_execution
-    a.apply_changes(p)
-    assert p.nodes()["n1"]["attr"]["x"] == -1
-    assert p.nodes()["n1"]["attr"]["color"] == "blue"
+    p_after, rec = a.apply_changes(p)
+    assert p_after.nodes()["n1"]["attr"]["x"] == -1
+    assert p_after.nodes()["n1"]["attr"]["color"] == "blue"
+    # undo restores both attributes
+    a.undo_changes(p_after, rec)
+    assert p_after.nodes()["n1"]["attr"]["x"] == 0
+    assert p_after.nodes()["n1"]["attr"]["color"] == "red"  # original color from fixture
 
 
 # ----------------------------------------------------------------------------
@@ -188,7 +196,7 @@ def test_search_layer_finds_counterfactual(threshold, expected_change):
     # all returned actions should satisfy the outcome after being applied
     for a in actions:
         p_copy = deepcopy(p)
-        p_after = a.apply_changes(p_copy)
+        p_after, _ = a.apply_changes(p_copy)
         assert tree.process_outcome(p_after)
 
 

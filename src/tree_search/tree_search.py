@@ -1,7 +1,7 @@
 import logging
 import multiprocessing as mp
 
-from copy import copy, deepcopy
+from copy import copy
 from logging.handlers import QueueListener, RotatingFileHandler
 from typing import List, Tuple
 
@@ -74,8 +74,11 @@ class TreeSearchCounterFactual:
     ):
         def evaluate_action(action, process_execution):
             # Check process outcome after applying changes
-            process_execution_c = action.apply_changes(deepcopy(process_execution))
+            process_execution_c, recorded_changes = action.apply_changes(
+                process_execution
+            )
             outcome_c = self.process_outcome(process_execution_c)
+            action.undo_changes(process_execution_c, recorded_changes)
 
             return outcome_c == self.counterfactual_label
 
@@ -105,7 +108,11 @@ class TreeSearchCounterFactual:
                     selected_actions.append(copy(action_prime))
 
                 # If feature actions space is not empty after selected change value
-                if has_value(feature.action_space(change_value, self.max_change_size - action.action_size())):
+                if has_value(
+                    feature.action_space(
+                        change_value, self.max_change_size - action.action_size()
+                    )
+                ):
                     next_features.add(feature)
 
                 next_actions.append((action_prime, next_features))
@@ -160,14 +167,18 @@ class TreeSearchCounterFactual:
                     next_actions_features.append(next_action)
 
             # Collect distinct selected actions
-            for selected_action in selected:
-                self.logger.info("Found counterfactual: %s", selected_action)
-                if selected_action not in selected_actions:
-                    selected_actions.append(selected_action)
+            self.logger.info("Found counterfactual: %s", selected)
+            if selected:
+                selected_actions.append(selected)
+                break
 
         if self.log_level == logging.DEBUG:
             with open(f"{self.log_file}-next_actions_features-{change_size}", "w") as f:
-                f.write("\n".join([f"{item[0]}\n\t{item[1]}" for item in next_actions_features]))
+                f.write(
+                    "\n".join(
+                        [f"{item[0]}\n\t{item[1]}" for item in next_actions_features]
+                    )
+                )
 
         # Return when valid counterfactual actions are found
         if selected_actions:

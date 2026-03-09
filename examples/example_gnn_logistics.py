@@ -319,7 +319,7 @@ a = Action(
     node_deletion=node_deletion,
 )
 
-a.apply_changes(counterfactual_pe)
+counterfactual_pe, _ = a.apply_changes(counterfactual_pe)
 print(a.action_size())
 print(process_outcome(counterfactual_pe))
 

@@ -69,7 +69,13 @@ def construct_graph_dict(
             # Build numeric features, optionally normalizing using (min,max) from num_spec
             node_feats = []
             for k in num_keys:
-                v = float(attr.get(k, 0.0))
+                try:
+                    v = float(attr.get(k, 0.0))
+                except Exception as inner_e:
+                    raise RuntimeError(
+                        f"Error converting numeric attribute '{k}' for node '{n}' of type '{node_type}': {inner_e}"
+                    ) from inner_e
+
                 if normalize and isinstance(num_spec, dict) and k in num_spec:
                     vmin, vmax = num_spec[k]
                     denom = float(vmax) - float(vmin)
@@ -85,11 +91,11 @@ def construct_graph_dict(
             # Encode categorical attributes by their index in the provided unique-values list
             cat_info = node_cat_keys.get(node_type, {}).get(t, {})
             for col, unique_vals in cat_info.items():
-                val = attr.get(col)
-                idx = 0
-                if val is not None:
+                try:
+                    val = attr.get(col)
+                    idx = 0
                     try:
-                        if unique_vals:
+                        if val is not None:
                             raw_idx = int(unique_vals.index(val))
                             if (
                                 normalize
@@ -100,18 +106,24 @@ def construct_graph_dict(
                             else:
                                 idx = int(raw_idx)
                         else:
-                            idx = 0
+                            idx = -1
                     except ValueError:
                         idx = 0
 
-                if feature_per_category:
-                    col_x = [0] * len(unique_vals)
-                    col_x[idx] = 1
-                    node_feats.extend(col_x)
-                    feat_labels.extend([f"{col}[{v}]" for v in unique_vals])
-                else:
-                    node_feats.append(idx)
-                    feat_labels.append(col)
+                    if feature_per_category:
+                        col_x = [0] * len(unique_vals)
+                        if idx != -1:
+                            col_x[idx] = 1
+                        node_feats.extend(col_x)
+                        feat_labels.extend([f"{col}[{v}]" for v in unique_vals])
+                    else:
+                        node_feats.append(idx)
+                        feat_labels.append(col)
+
+                except Exception as inner_e:
+                    raise RuntimeError(
+                        f"Error processing categorical attribute '{col}' for node '{n}' of type '{node_type}': {inner_e}"
+                    ) from inner_e
 
             if not node_feats:
                 node_feats = [float(0.0)]

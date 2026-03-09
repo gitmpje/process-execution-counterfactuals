@@ -2,17 +2,17 @@ import sys
 import pathlib
 import pytest
 
-from process_execution.process_execution import ProcessExecution
-from tree_search.feature import (
-    NodeAttributeNumeric,
-    NodeAttributeCategorical,
-)
-
 # Make the src/ folder importable so that tests can execute without installing the package
 root = pathlib.Path(__file__).parent.parent
 src_path = root / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
+
+from process_execution.process_execution import ProcessExecution
+from tree_search.feature import (
+    NodeAttributeNumeric,
+    NodeAttributeCategorical,
+)
 
 
 @pytest.fixture

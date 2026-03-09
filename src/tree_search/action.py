@@ -69,6 +69,26 @@ class Action:
             and self.node_attributes_modification == other.node_attributes_modification
         )
 
+    def undo_changes(self, p: ProcessExecution, record: dict) -> ProcessExecution:
+        """
+        Revert the changes previously applied by :meth:`apply_changes` using the
+        provided record. The process execution `p` is modified in place and
+        returned for convenience.
+        """
+        # restore node attribute modifications
+        for feature, undo_info in record.get("node_attributes", {}).items():
+            feature.undo_change(p, undo_info)
+
+        # restore deletions (nodes and edges)
+        for feature, undo_info in record.get("node_deletion", {}).items():
+            feature.undo_change(p, undo_info)
+
+        # restore object substitutions
+        for feature, undo_info in record.get("object_substitution", {}).items():
+            feature.undo_change(p, undo_info)
+
+        return p
+
     def __ne__(self, other):
         """
         Inequality check for Action objects.
@@ -163,23 +183,34 @@ class Action:
     def apply_changes(
         self,
         p: ProcessExecution,
-    ) -> ProcessExecution:
+    ) -> Tuple[ProcessExecution, dict]:
         """
         Apply the changes defined in the action to a given process execution.
+        A record of the original state is returned to allow undoing the changes.
         Args:
             p (ProcessExecution): The process execution to which the changes will be applied.
         Returns:
-            ProcessExecution: The modified process execution after applying the changes.
+            Tuple[ProcessExecution, dict]: The modified process execution and a record
+                containing information required to undo the applied changes.
         """
 
+        # record structure holds per-feature undo data
+        record: dict = {
+            "node_attributes": {},
+            "node_deletion": {},
+            "object_substitution": {},
+        }
+
         for feature, value in self.node_attributes_modification.items():
-            feature.apply_change(p, value)
+            record["node_attributes"][feature] = feature.apply_change(p, value)
 
         for feature, deletion in self.node_deletion.items():
             if deletion:
-                feature.apply_change(p, deletion)
+                record["node_deletion"][feature] = feature.apply_change(p, deletion)
 
         for feature, substitution in self.object_substitution.items():
             if substitution:
-                feature.apply_change(p, substitution)
-        return p
+                record["object_substitution"][feature] = feature.apply_change(
+                    p, substitution
+                )
+        return p, record

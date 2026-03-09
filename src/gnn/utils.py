@@ -63,7 +63,7 @@ class Metadata:
 def construct_node_num_keys(
     selected_object_types: List[str],
     selected_event_types: List[str],
-    df_object: DataFrame,
+    df_objects: DataFrame,
     df_events: DataFrame,
     object_type_column: str = "ocel:type",
     event_activity_column: str = "ocel:activity",
@@ -89,17 +89,17 @@ def construct_node_num_keys(
 
     # Generic OBJECT: all numeric columns across all objects
     num_cols = (
-        df_object.select_dtypes(include=["number"]).dropna(axis=1).columns.tolist()
+        df_objects.select_dtypes(include=["number"]).dropna(axis=1).columns.tolist()
     )
     num_cols = [c for c in num_cols if c not in exclude_attributes]
     object_num_keys["OBJECT"] = {
-        col: (float(df_object[col].min()), float(df_object[col].max()))
+        col: (float(df_objects[col].min()), float(df_objects[col].max()))
         for col in num_cols
     }
 
     # Per-type OBJECT: specific numeric columns for each object type
     for obj_type in selected_object_types:
-        df_t = df_object[df_object[object_type_column] == obj_type]
+        df_t = df_objects[df_objects[object_type_column] == obj_type]
         cols_t = df_t.select_dtypes(include=["number"]).dropna(axis=1).columns.tolist()
         cols_t = [c for c in cols_t if c not in exclude_attributes]
         object_num_keys[obj_type] = {
@@ -143,7 +143,7 @@ def construct_node_num_keys(
 def construct_node_cat_keys(
     selected_object_types: List[str],
     selected_event_types: List[str],
-    df_object,
+    df_objects,
     df_events,
     object_type_column: str = "ocel:type",
     event_activity_column: str = "ocel:activity",
@@ -169,21 +169,29 @@ def construct_node_cat_keys(
 
     # Generic OBJECT: all categorical (non-numeric) columns across all objects
     cat_cols = (
-        df_object.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
+        df_objects.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
     )
     cat_cols = [c for c in cat_cols if c not in exclude_attributes]
-    object_cat_keys["OBJECT"] = {
-        col: df_object[col].dropna().unique().tolist() for col in cat_cols
-    }
+    object_cat_keys["OBJECT"] = {}
+    for col in cat_cols:
+        unique_values = df_objects[col].dropna().unique().tolist()
+        if unique_values:
+            object_cat_keys["OBJECT"][col] = unique_values
 
     # Per-type OBJECT: specific categorical columns for each object type
     for obj_type in selected_object_types:
-        df_t = df_object[df_object[object_type_column] == obj_type]
-        cols_t = df_t.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
-        cols_t = [c for c in cols_t if c not in exclude_attributes]
-        object_cat_keys[obj_type] = {
-            col: df_t[col].dropna().unique().tolist() for col in cols_t
-        }
+        object_cat_keys[obj_type] = {}
+        df_t = df_objects[df_objects[object_type_column] == obj_type]
+        if not df_t.empty:
+            cols_t = df_t.select_dtypes(exclude=["number"]).dropna().columns.tolist()
+            cols_t = [c for c in cols_t if c not in exclude_attributes]
+            object_cat_keys[obj_type] = {}
+            for col in cols_t:
+                unique_values = df_t[col].dropna().unique().tolist()
+                if unique_values:
+                    object_cat_keys[obj_type][col] = unique_values
+        else:
+            object_cat_keys[obj_type] = {}
 
     node_cat_keys["OBJECT"] = object_cat_keys
 
@@ -191,25 +199,28 @@ def construct_node_cat_keys(
     event_cat_keys = {}
 
     # Generic EVENT: all categorical (non-numeric) columns across all events
-    cat_cols = (
-        df_events.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
-    )
+    cat_cols = df_events.select_dtypes(exclude=["number"]).dropna().columns.tolist()
     cat_cols = [c for c in cat_cols if c not in exclude_attributes]
-    event_cat_keys["EVENT"] = {
-        col: df_events[col].dropna().unique().tolist() for col in cat_cols
-    }
+    event_cat_keys["EVENT"] = {}
+    for col in cat_cols:
+        unique_values = df_events[col].dropna().unique().tolist()
+        if unique_values:
+            event_cat_keys["EVENT"][col] = unique_values
 
     # Per-type EVENT: specific categorical columns for each activity/event type
     for event_type in selected_event_types:
+        event_cat_keys[event_type] = {}
         df_t = df_events[df_events[event_activity_column] == event_type]
         if not df_t.empty:
             cols_t = (
                 df_t.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
             )
             cols_t = [c for c in cols_t if c not in exclude_attributes]
-            event_cat_keys[event_type] = {
-                col: df_t[col].dropna().unique().tolist() for col in cols_t
-            }
+            event_cat_keys[obj_type][col] = {}
+            for col in cols_t:
+                unique_values = df_t[col].dropna().unique().tolist()
+                if unique_values:
+                    event_cat_keys[obj_type][col] = unique_values
         else:
             event_cat_keys[event_type] = {}
 
