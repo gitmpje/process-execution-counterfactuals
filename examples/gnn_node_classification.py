@@ -10,9 +10,9 @@ from collections import Counter
 from networkx import Graph
 from numpy import arange
 
-from tree_search.action import Action
+from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
-from tree_search.feature import (
+from tree_search.action import (
     EventNodeDeletion,
     NodeAttributeNumeric,
     ObjectNodeSubstitution,
@@ -230,8 +230,8 @@ target_process_execution = trace_graphs[target_process_execution_id][
 ]
 counterfactual_label = not trace_graphs[target_process_execution_id]["class"]
 
-# Object substitution features
-object_substitution_features = []
+# Object substitution actions
+object_substitution_actions = []
 for node_id, node_data in target_process_execution.nodes(data=True):
     if node_data["attr"].get("type", "") != "OBJECT":
         continue
@@ -251,7 +251,7 @@ for node_id, node_data in target_process_execution.nodes(data=True):
         and subst_id != node_id
     ]
 
-    object_substitution_features.append(
+    object_substitution_actions.append(
         ObjectNodeSubstitution(
             object_id=node_id,
             object_data=node_data,
@@ -267,13 +267,13 @@ for node_id, node_data in target_process_execution.nodes(data=True):
     )
 
 # Events that can be deleted
-node_deletion_features = [
+node_deletion_actions = [
     EventNodeDeletion(deletion_options=[[node_id]])
     for node_id, attr in target_process_execution.nodes(data="attr")
     if attr.get("type", "") == "EVENT"
 ]
 
-# Features for event node attributes
+# Actions for event node attributes
 event_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
@@ -287,7 +287,7 @@ event_node_attributes = [
     if attr_name in selected_attributes
 ]
 
-# Features for object node attributes
+# Actions for object node attributes
 object_node_attributes = [
     NodeAttributeNumeric(
         node_id=node_id,
@@ -301,10 +301,10 @@ object_node_attributes = [
     if attr_name in selected_attributes
 ]
 
-available_features = object_node_attributes  # object_substitution_features + node_deletion_features + event_node_attributes
-for feature in available_features:
-    print(feature)
-print(f"Total number of features: {len(available_features)}")
+available_actions = object_node_attributes  # object_substitution_actions + node_deletion_actions + event_node_attributes
+for action in available_actions:
+    print(action)
+print(f"Total number of actions: {len(available_actions)}")
 
 # %% Run tree search algorithm to find counter factuals
 tree_search = TreeSearchCounterFactual(
@@ -314,7 +314,7 @@ tree_search = TreeSearchCounterFactual(
 )
 
 selected_actions = tree_search.search_layer(
-    [(Action(), available_features)],
+    [(ActionSet(), available_actions)],
     target_process_execution if PROCESS_EXECUTION_LEVEL else ocel_nx,
 )
 

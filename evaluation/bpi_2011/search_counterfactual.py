@@ -7,15 +7,12 @@ import yaml
 
 from networkx import Graph
 
-from tree_search.action import Action
 from tree_search.tree_search import TreeSearchCounterFactual
-from tree_search.feature_helpers import (
-    build_object_substitution_features,
-    build_node_deletion_features,
-    build_node_attribute_features,
+from tree_search.action_helpers import (
+    build_object_substitution_actions,
+    build_node_deletion_actions,
+    build_node_attribute_actions,
     construct_attribute_spec_dict,
-)
-from tree_search.feature_selection import (
     get_nodes_by_importance,
     get_feature_labels_by_importance,
 )
@@ -84,7 +81,7 @@ def process_outcome(p: Graph) -> bool:
         viewpoint=metadata.viewpoint,
         node_y_mapping={target_process_execution_id: None},
         normalize=metadata.normalized,
-        feature_per_category=metadata.feature_per_category,
+        one_hot_encoding=metadata.one_hot_encoding,
     )
 
     data = data.to(device)
@@ -123,7 +120,7 @@ attribute_spec_dict = construct_attribute_spec_dict(
 # Extract target process execution
 events = set([e for e, _ in ocel_nx.in_edges(target_process_execution_id)])
 nodes = events | set([target_process_execution_id])
-target_process_execution = ocel_nx.subgraph(nodes)
+target_process_execution = ocel_nx.subgraph(nodes).copy()
 
 counterfactual_label = not process_outcome(target_process_execution)
 
@@ -150,73 +147,74 @@ attr_ordered = {
     for node_type, features in get_feature_labels_by_importance(
         explanation=target_explanation,
         feat_label_dict=feat_label_dict,
-        feature_per_category=metadata.feature_per_category,
+        one_hot_encoding=metadata.one_hot_encoding,
     ).items()
 }
 
-counterfactual_label = not process_outcome(target_process_execution)
+actions_grouped = []
+for node in nodes_ordered:
+    # Actions for object node attributes
+    object_node_attributes = build_node_attribute_actions(
+        target_nodes=target_process_execution.nodes(data=True),
+        attribute_spec_dict=attribute_spec_dict,
+        nodes_order=[node],
+        attr_order=attr_ordered,
+        node_type="OBJECT",
+        object_type_column=ocel.object_type_column,
+    )
 
+    # Object substitution actions
+    target_nodes_for_subst = (
+        (n, target_process_execution.nodes(data=True)[n])
+        for n in [node]
+        if target_process_execution.nodes(data=True)[n]
+        .get("attr", {})
+        .get(ocel.object_type_column, "")
+        in [""]
+    )
 
-# Features for object node attributes
-object_node_attributes = build_node_attribute_features(
-    target_nodes=target_process_execution.nodes(data=True),
-    attribute_spec_dict=attribute_spec_dict,
-    nodes_order=nodes_ordered,
-    attr_order=attr_ordered,
-    node_type="OBJECT",
-    object_type_column=ocel.object_type_column,
-)
+    object_substitution_actions = build_object_substitution_actions(
+        target_nodes=target_nodes_for_subst,
+        ocel_nodes=ocel_nx.nodes(data=True),
+        graph=target_process_execution,
+        object_type_column=ocel.object_type_column,
+        attribute_spec_dict=attribute_spec_dict,
+    )
 
-# Object substitution features
-target_nodes_for_subst = (
-    (n, target_process_execution.nodes(data=True)[n])
-    for n in nodes_ordered
-    if target_process_execution.nodes(data=True)[n]
-    .get("attr", {})
-    .get(ocel.object_type_column, "")
-    in [""]
-)
+    # Actions for event node attributes
+    event_node_attributes = build_node_attribute_actions(
+        target_nodes=target_process_execution.nodes(data=True),
+        attribute_spec_dict=attribute_spec_dict,
+        nodes_order=[node],
+        attr_order=attr_ordered,
+        node_type="EVENT",
+    )
 
-object_substitution_features = build_object_substitution_features(
-    target_nodes=target_nodes_for_subst,
-    ocel_nodes=ocel_nx.nodes(data=True),
-    graph=target_process_execution,
-    object_type_column=ocel.object_type_column,
-    attribute_spec_dict=attribute_spec_dict,
-)
+    # Events that can be deleted
+    node_deletion_actions = build_node_deletion_actions(
+        target_process_execution.nodes(data=True),
+        nodes_order=[node],
+        viewpoint=metadata.viewpoint,
+        object_type_column=ocel.object_type_column,
+    )
 
-# Features for event node attributes
-event_node_attributes = build_node_attribute_features(
-    target_nodes=target_process_execution.nodes(data=True),
-    attribute_spec_dict=attribute_spec_dict,
-    nodes_order=nodes_ordered,
-    attr_order=attr_ordered,
-    node_type="EVENT",
-)
+    available_actions = (
+        object_node_attributes
+        + object_substitution_actions
+        + node_deletion_actions
+        + event_node_attributes
+    )
+    selected_actions = []
+    print(f"\nSelected actions for node {node}:")
+    for action in available_actions:
+        if action.action_space_size() > 0:
+            print(action)
+            selected_actions.append(action)
 
-# Events that can be deleted
-node_deletion_features = build_node_deletion_features(
-    target_process_execution.nodes(data=True),
-    nodes_order=nodes_ordered,
-    viewpoint=metadata.viewpoint,
-    object_type_column=ocel.object_type_column,
-)
-
-available_features = (
-    object_node_attributes
-    # + object_substitution_features
-    # + node_deletion_features
-    + event_node_attributes
-)
-print(f"Total number of features: {len(available_features)}")
-selected_features = []
-for feature in available_features:
-    if feature.action_space_size() > 0:
-        print(feature)
-        selected_features.append(feature)
+    actions_grouped.append(available_actions)
+    print(f"Selected number of actions for node {node}: {len(selected_actions)}")
 
 print(f"counterfactual_label={counterfactual_label}")
-print(f"Selected number of features (action space size > 0): {len(selected_features)}")
 
 # %% Run tree search algorithm to find counter factuals
 tree_search = TreeSearchCounterFactual(
@@ -226,9 +224,9 @@ tree_search = TreeSearchCounterFactual(
     log_file="logs/bpi_2011.log",
 )
 
-selected_actions = tree_search.search_layer(
-    [(Action(), available_features)],
-    target_process_execution,
+selected_actions = tree_search.search_depth_first(
+    actions_grouped=actions_grouped,
+    process_execution=target_process_execution,
 )
 
 # %% Display results

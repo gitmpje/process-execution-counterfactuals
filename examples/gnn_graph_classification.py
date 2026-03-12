@@ -5,14 +5,12 @@ import os
 import pm4py
 import torch
 
-from tree_search.action import Action
-from tree_search.feature_helpers import (
-    build_object_substitution_features,
-    build_node_deletion_features,
-    build_node_attribute_features,
+from tree_search.action_set import ActionSet
+from tree_search.action_helpers import (
+    build_object_substitution_actions,
+    build_node_deletion_actions,
+    build_node_attribute_actions,
     construct_attribute_spec_dict,
-)
-from tree_search.feature_selection import (
     get_nodes_by_importance,
     get_feature_labels_by_importance,
 )
@@ -101,7 +99,7 @@ def process_outcome(p: ProcessExecution) -> bool:
         viewpoint=metadata.viewpoint,
         node_y_mapping={target_process_execution_id: None},
         normalize=metadata.normalized,
-        feature_per_category=metadata.feature_per_category,
+        one_hot_encoding=metadata.one_hot_encoding,
     )
 
     data = data.to(device)
@@ -167,12 +165,12 @@ attr_ordered = {
     for node_type, features in get_feature_labels_by_importance(
         explanation=target_explanation,
         feat_label_dict=feat_label_dict,
-        feature_per_category=metadata.feature_per_category,
+        one_hot_encoding=metadata.one_hot_encoding,
     ).items()
 }
 
-# Features for object node attributes
-object_node_attributes = build_node_attribute_features(
+# Actions for object node attributes
+object_node_attributes = build_node_attribute_actions(
     target_nodes=target_process_execution.nodes(data=True),
     attribute_spec_dict=attribute_spec_dict,
     node_type="OBJECT",
@@ -182,7 +180,7 @@ object_node_attributes = build_node_attribute_features(
 )
 
 
-# Object substitution features
+# Object substitution actions
 def _check_capability(node_attr, subst_attr):
     return node_attr.get("capability", "") == subst_attr.get("capability", "")
 
@@ -195,7 +193,7 @@ target_nodes_for_subst = (
     == "ProductionResource"
 )
 
-object_substitution_features = build_object_substitution_features(
+object_substitution_actions = build_object_substitution_actions(
     target_nodes=target_nodes_for_subst,
     ocel_nodes=ocel_nx.nodes(data=True),
     graph=target_process_execution,
@@ -204,8 +202,8 @@ object_substitution_features = build_object_substitution_features(
     attribute_spec_dict=attribute_spec_dict,
 )
 
-# Features for event node attributes
-event_node_attributes = build_node_attribute_features(
+# Actions for event node attributes
+event_node_attributes = build_node_attribute_actions(
     target_nodes=target_process_execution.nodes(data=True),
     attribute_spec_dict=attribute_spec_dict,
     node_type="EVENT",
@@ -214,25 +212,25 @@ event_node_attributes = build_node_attribute_features(
 )
 
 # Events that can be deleted
-node_deletion_features = build_node_deletion_features(
+node_deletion_actions = build_node_deletion_actions(
     target_process_execution.nodes(data=True)
 )
 
-available_features = (
+available_actions = (
     object_node_attributes
-    # + event_node_attributes + object_substitution_features
-    # + node_deletion_features
+    # + event_node_attributes + object_substitution_actions
+    # + node_deletion_actions
 )
 
-print(f"Total number of features: {len(available_features)}")
-selected_features = []
-for feature in available_features:
-    if feature.action_space_size() > 0:
-        print(feature)
-        selected_features.append(feature)
+print(f"Total number of actions: {len(available_actions)}")
+selected_actions = []
+for action in available_actions:
+    if action.action_space_size() > 0:
+        print(action)
+        selected_actions.append(action)
 
 print(f"counterfactual_label={counterfactual_label}")
-print(f"Selected number of features (action space size > 0): {len(selected_features)}")
+print(f"Selected number of actions (action space size > 0): {len(selected_actions)}")
 
 
 # %% Run tree search algorithm to find counter factuals
@@ -244,7 +242,7 @@ tree_search = TreeSearchCounterFactual(
 )
 
 selected_actions = tree_search.search_layer(
-    [(Action(), selected_features)],
+    [(ActionSet(), selected_actions)],
     target_process_execution,
 )
 

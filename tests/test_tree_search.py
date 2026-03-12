@@ -13,13 +13,13 @@ from tree_search.tree_search import (
     TreeSearchCounterFactual,
     TreeSearchCounterFactualParallel,
 )
-from tree_search.action import Action
-from tree_search.feature import NodeAttributeNumeric
+from tree_search.action_set import ActionSet
+from tree_search.action import NodeAttributeNumeric
 from process_execution.process_execution import ProcessExecution
 
 
-class DummyFeature:
-    """Minimal feature stub used only for testing ``maximum_number_of_actions``."""
+class DummyAction:
+    """Minimal action stub used only for testing ``maximum_number_of_actions``."""
 
     def __init__(self, size: int):
         self._size = size
@@ -73,34 +73,34 @@ def test_maximum_number_of_actions():
     t = TreeSearchCounterFactual(
         process_outcome=lambda x: False, counterfactual_label=False
     )
-    feats = [DummyFeature(3), DummyFeature(4)]
+    feats = [DummyAction(3), DummyAction(4)]
     # product of sizes (3 * 4)
     assert t.maximum_number_of_actions(feats) == 12
 
 
 # ----------------------------------------------------------------------------
-# tests for ``Action`` behaviour
+# tests for ``ActionSet`` behaviour
 # ----------------------------------------------------------------------------
-def test_action_equality_repr_and_copy(numeric_feature, categorical_feature):
-    a1 = Action()
+def test_action_equality_repr_and_copy(numeric_action, categorical_action):
+    a1 = ActionSet()
     a2 = deepcopy(a1)
     assert a1 == a2
-    a1.set_change_value(numeric_feature, 1)
+    a1.set_change_value(numeric_action, 1)
     assert a1 != a2
     r = repr(a1)
     assert "node_attributes_modification" in r
 
 
-def test_action_size_objective_and_apply(simple_process_execution, numeric_feature):
-    a = Action()
+def test_action_size_objective_and_apply(simple_process_execution, numeric_action):
+    a = ActionSet()
     # no changes initially
     assert a.action_size() == 0
     assert a.objective_value() == 0
 
     # set a change value and apply it to the process
-    a.set_change_value(numeric_feature, 1)
-    assert a.get_change_value(numeric_feature) == 1
-    assert a.action_size() == numeric_feature.change_size(1)
+    a.set_change_value(numeric_action, 1)
+    assert a.get_change_value(numeric_action) == 1
+    assert a.action_size() == numeric_action.change_size(1)
     # objective counts nonzero modifications
     assert a.objective_value() == 1
 
@@ -113,16 +113,16 @@ def test_action_size_objective_and_apply(simple_process_execution, numeric_featu
     assert p_after.nodes()["n1"]["attr"]["x"] == 0
 
 
-def test_action_apply_multiple_feature_types(
-    simple_process_execution, numeric_feature, categorical_feature
+def test_action_apply_multiple_action_types(
+    simple_process_execution, numeric_action, categorical_action
 ):
-    a = Action()
-    a.set_change_value(numeric_feature, -1)
-    a.set_change_value(categorical_feature, "blue")
+    a = ActionSet()
+    a.set_change_value(numeric_action, -1)
+    a.set_change_value(categorical_action, "blue")
     # categorical changes are now counted in ``action_size``
-    assert a.action_size() == numeric_feature.change_size(
+    assert a.action_size() == numeric_action.change_size(
         -1
-    ) + categorical_feature.change_size("blue")
+    ) + categorical_action.change_size("blue")
     p = simple_process_execution
     p_after, rec = a.apply_changes(p)
     assert p_after.nodes()["n1"]["attr"]["x"] == -1
@@ -130,35 +130,37 @@ def test_action_apply_multiple_feature_types(
     # undo restores both attributes
     a.undo_changes(p_after, rec)
     assert p_after.nodes()["n1"]["attr"]["x"] == 0
-    assert p_after.nodes()["n1"]["attr"]["color"] == "red"  # original color from fixture
+    assert (
+        p_after.nodes()["n1"]["attr"]["color"] == "red"
+    )  # original color from fixture
 
 
 # ----------------------------------------------------------------------------
-# tests for feature enumerations (numeric & categorical)
+# tests for action enumerations (numeric & categorical)
 # ----------------------------------------------------------------------------
-def test_numeric_feature_action_space(numeric_feature):
+def test_numeric_action_action_space(numeric_action):
     # starting from zero, we should be able to move +-1 within +/-2 bound
     vals = list(
-        numeric_feature.action_space(current_change_value=0, max_change_size_delta=1)
+        numeric_action.action_space(current_change_value=0, max_change_size_delta=1)
     )
     assert 1 in vals or -1 in vals
     # values should not exceed defined bounds
     assert all(
-        numeric_feature.value_min - numeric_feature.value_original
+        numeric_action.value_min - numeric_action.value_original
         <= v
-        <= numeric_feature.value_max - numeric_feature.value_original
+        <= numeric_action.value_max - numeric_action.value_original
         for v in vals
     )
 
 
-def test_categorical_feature_action_space(categorical_feature):
+def test_categorical_action_action_space(categorical_action):
     vals = list(
-        categorical_feature.action_space(
+        categorical_action.action_space(
             current_change_value=None, max_change_size_delta=1
         )
     )
-    assert set(vals) <= set(categorical_feature.category_values)
-    assert categorical_feature.value_original not in vals
+    assert set(vals) <= set(categorical_action.category_values)
+    assert categorical_action.value_original not in vals
 
 
 # ----------------------------------------------------------------------------
@@ -173,7 +175,7 @@ def test_categorical_feature_action_space(categorical_feature):
 )
 def test_search_layer_finds_counterfactual(threshold, expected_change):
     """Search should return at least one action that achieves the desired threshold."""
-    feat = NodeAttributeNumeric(
+    action = NodeAttributeNumeric(
         node_id="n1",
         attribute_name="x",
         value_original=0,
@@ -189,12 +191,14 @@ def test_search_layer_finds_counterfactual(threshold, expected_change):
         max_change_size=2,
         log_level=50,  # suppress logging during tests
     )
-    actions = tree.search_layer([(Action(), [feat])], p)
-    assert actions, "no actions returned"
-    got_values = {a.get_change_value(feat) for a in actions}
+    selected_action_sets = tree.search_layer([(ActionSet(), [action])], p)
+    assert selected_action_sets, "no actions returned"
+    got_values = {
+        action_set.get_change_value(action) for action_set in selected_action_sets
+    }
     assert expected_change in got_values
     # all returned actions should satisfy the outcome after being applied
-    for a in actions:
+    for a in selected_action_sets:
         p_copy = deepcopy(p)
         p_after, _ = a.apply_changes(p_copy)
         assert tree.process_outcome(p_after)
@@ -223,7 +227,7 @@ def test_search_layer_no_solution():
         max_change_size=2,
         log_level=50,
     )
-    actions = tree.search_layer([(Action(), [feat])], p)
+    actions = tree.search_layer([(ActionSet(), [feat])], p)
     assert actions == []
 
 
@@ -252,9 +256,9 @@ def test_parallel_search_matches_sequential():
         max_change_size=2,
         log_level=50,
     )
-    seq_actions = seq.search_layer([(Action(), [feat])], deepcopy(p))
+    seq_actions = seq.search_layer([(ActionSet(), [feat])], deepcopy(p))
     # use a picklable outcome for the parallel instance
-    par_actions = par.search_layer([(Action(), [feat])], deepcopy(p))
+    par_actions = par.search_layer([(ActionSet(), [feat])], deepcopy(p))
     assert seq_actions == par_actions
 
 

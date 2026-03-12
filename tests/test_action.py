@@ -2,7 +2,7 @@ import pytest
 
 from process_execution.process_execution import ProcessExecution
 
-from tree_search.feature import (
+from tree_search.action import (
     NodeAttributeNumeric,
     NodeAttributeCategorical,
     ObjectNodeSubstitution,
@@ -13,10 +13,11 @@ from tree_search.feature import (
 
 
 # ---------------------------------------------------------------------------
-# numeric and categorical features
+# numeric and categorical actions
 # ---------------------------------------------------------------------------
 
-def test_numeric_feature_action_space_and_size():
+
+def test_numeric_action_action_space_and_size():
     f = NodeAttributeNumeric(
         node_id="n1",
         attribute_name="v",
@@ -32,7 +33,7 @@ def test_numeric_feature_action_space_and_size():
     assert f.change_size(2) == pytest.approx(1.0)
 
 
-def test_categorical_feature_sizes():
+def test_categorical_action_sizes():
     f = NodeAttributeCategorical(
         node_id="n1",
         attribute_name="c",
@@ -49,6 +50,7 @@ def test_categorical_feature_sizes():
 # object substitution behaviour
 # ---------------------------------------------------------------------------
 
+
 def make_simple_object_graph():
     p = ProcessExecution()
     p.add_node("o1", attr={"type": "OBJECT"})
@@ -60,7 +62,7 @@ def make_simple_object_graph():
 
 def test_object_substitution_apply_and_cost():
     p = make_simple_object_graph()
-    feat = ObjectNodeSubstitution(
+    action = ObjectNodeSubstitution(
         object_id="o1",
         substitution_objects=[("o2", {"attr": {"type": "OBJECT"}})],
         event_ids=["e1"],
@@ -69,12 +71,12 @@ def test_object_substitution_apply_and_cost():
     )
     before_edges = list(p.in_edges("o1"))
     assert before_edges
-    p2 = feat.apply_change(p, ("o2", {"attr": {}}))
-    assert not p2.has_node("o1")
-    assert p2.has_edge("e1", "o2")
+    action.apply_change(p, ("o2", {"attr": {}}))
+    assert not p.has_node("o1")
+    assert p.has_edge("e1", "o2")
     # cost should be calculable without error (should not raise)
     try:
-        _ = feat.change_size(subst_node=("o2", {"attr": {"type": "OBJECT"}}))
+        _ = action.change_size(subst_node=("o2", {"attr": {"type": "OBJECT"}}))
     except NotImplementedError:
         pytest.skip("change_size not implemented for given types")
 
@@ -82,6 +84,7 @@ def test_object_substitution_apply_and_cost():
 # ---------------------------------------------------------------------------
 # node deletion logic
 # ---------------------------------------------------------------------------
+
 
 def test_node_deletion_action_space():
     f = NodeDeletion(deletion_options=[["a", "b"], ["c"]])
@@ -98,16 +101,20 @@ def test_event_node_deletion_apply():
     p.add_node("e0", attr={"type": "EVENT"})
     p.add_edge("e1", "e2", attr={"type": "DF"})
     p.add_edge("e0", "e1", attr={"type": "DF"})
-    feat = EventNodeDeletion(deletion_options=[["e1"]])
-    p2 = feat.apply_change(p, ["e1"])
-    assert not p2.has_node("e1")
+
+    action = EventNodeDeletion(deletion_options=[["e1"]])
+    r = action.apply_change(p, ["e1"])
+
+    # node should not exist anymore
+    assert not p.has_node("e1")
+
     # new edge e0->e2 should exist
-    assert p2.has_edge("e0", "e2")
+    assert p.has_edge("e0", "e2")
 
 
 def test_object_node_deletion_apply():
     p = ProcessExecution()
     p.add_node("o1", attr={"type": "OBJECT"})
-    feat = ObjectNodeDeletion(deletion_options=[["o1"]])
-    p2 = feat.apply_change(p, ["o1"])
-    assert not p2.has_node("o1")
+    action = ObjectNodeDeletion(deletion_options=[["o1"]])
+    action.apply_change(p, ["o1"])
+    assert not p.has_node("o1")

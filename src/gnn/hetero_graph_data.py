@@ -17,7 +17,7 @@ def construct_graph_dict(
     node_y_mapping: Dict[str, int | float] = None,
     node_type_object: str = "OBJECT",
     node_type_event: str = "EVENT",
-    feature_per_category: bool = False,
+    one_hot_encoding: bool = False,
     add_reverse_edges: bool = False,
     normalize: bool = False,
 ):
@@ -100,7 +100,7 @@ def construct_graph_dict(
                             if (
                                 normalize
                                 and len(unique_vals) > 1
-                                and not feature_per_category
+                                and not one_hot_encoding
                             ):
                                 idx = float(raw_idx) / float(len(unique_vals) - 1)
                             else:
@@ -110,7 +110,7 @@ def construct_graph_dict(
                     except ValueError:
                         idx = 0
 
-                    if feature_per_category:
+                    if one_hot_encoding:
                         col_x = [0] * len(unique_vals)
                         if idx != -1:
                             col_x[idx] = 1
@@ -185,7 +185,7 @@ def build_hetero_data(
     add_reverse_edges: bool = False,
     path_dataset: str = None,
     normalize: bool = False,
-    feature_per_category: bool = False,
+    one_hot_encoding: bool = False,
 ) -> Tuple[HeteroData, Set[str], Set[str]]:
     hetero_data = HeteroData()
     graph_dict, node_types, edge_types, feat_label_dict, node_label_dict = (
@@ -199,7 +199,7 @@ def build_hetero_data(
             node_y_mapping=node_y_mapping,
             add_reverse_edges=add_reverse_edges,
             normalize=normalize,
-            feature_per_category=feature_per_category,
+            one_hot_encoding=one_hot_encoding,
         )
     )
 

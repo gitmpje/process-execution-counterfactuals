@@ -1,3 +1,4 @@
+from networkx import MultiDiGraph
 from pandas import DataFrame
 from pm4py import convert_ocel_to_networkx, convert_log_to_ocel
 
@@ -20,7 +21,7 @@ def convert_event_log_ocel(event_log: DataFrame, viewpoint: str):
     df_event.drop(columns=["concept:name", "time:timestamp"], inplace=True)
     ocel.events = ocel.events.join(df_event)
 
-    ocel_nx = convert_ocel_to_networkx(ocel)
+    ocel_nx = MultiDiGraph(convert_ocel_to_networkx(ocel))
 
     # Convert timestamp to epoch
     for _, attr in ocel_nx.nodes(data="attr"):

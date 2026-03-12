@@ -5,12 +5,11 @@ import pm4py
 from collections import Counter
 from networkx import Graph
 
-from tree_search.feature_helpers import (
-    build_object_substitution_features,
-    build_node_attribute_features,
+from tree_search.action_helpers import (
+    build_object_substitution_actions,
+    build_node_attribute_actions,
     construct_attribute_spec_dict,
 )
-from tree_search.action import Action
 from tree_search.tree_search import TreeSearchCounterFactual
 from process_execution.process_execution import (
     extract_process_execution,
@@ -106,7 +105,7 @@ target_process_execution = trace_graphs[target_process_execution_id][
 ]
 
 
-# Object substitution features
+# Object substitution actions
 def _check_capability(node_attr, subst_attr):
     return node_attr.get("capability", "") == subst_attr.get("capability", "")
 
@@ -117,7 +116,7 @@ target_nodes_for_subst = (
     if d.get("attr", {}).get(ocel.object_type_column, "") == "ProductionResource"
 )
 
-object_substitution_features = build_object_substitution_features(
+object_substitution_actions = build_object_substitution_actions(
     target_nodes=target_nodes_for_subst,
     ocel_nodes=ocel_nx.nodes(data=True),
     graph=target_process_execution,
@@ -126,16 +125,16 @@ object_substitution_features = build_object_substitution_features(
     attribute_spec_dict=attribute_spec_dict,
 )
 
-# Features for event node attributes
-event_node_attributes = build_node_attribute_features(
+# Actions for event node attributes
+event_node_attributes = build_node_attribute_actions(
     target_nodes=target_process_execution.nodes(data=True),
     attribute_spec_dict=attribute_spec_dict,
     node_type="EVENT",
 )
 
-available_features = object_substitution_features + event_node_attributes
-for feature in available_features:
-    print(feature)
+available_actions = object_substitution_actions + event_node_attributes
+for action in available_actions:
+    print(action)
 
 tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
@@ -145,12 +144,12 @@ tree_search = TreeSearchCounterFactual(
 
 print(
     "Maximum number of actions to evaluate: ",
-    tree_search.maximum_number_of_actions(available_features),
+    tree_search.maximum_number_of_actions(available_actions),
 )
 
 # %% Run tree search algorithm to find counter factuals
-selected_actions = tree_search.search_layer(
-    [(Action(), available_features)],
+selected_actions = tree_search.search_depth_first(
+    [object_substitution_actions, event_node_attributes],
     target_process_execution,
 )
 

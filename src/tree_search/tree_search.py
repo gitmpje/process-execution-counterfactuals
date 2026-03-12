@@ -7,8 +7,8 @@ from typing import List, Tuple
 
 from process_execution.process_execution import ProcessExecution
 
+from tree_search.action_set import ActionSet
 from tree_search.action import Action
-from tree_search.feature import Feature
 
 
 log_queue = mp.Queue()
@@ -53,89 +53,91 @@ class TreeSearchCounterFactual:
 
     def maximum_number_of_actions(
         self,
-        available_features: List[Feature],
+        available_actions: List[Action],
     ) -> int:
         """
         Calculate maximum number of actions.
         """
         n_actions = 1
-        for feature in available_features:
-            n_actions *= max(feature.action_space_size(), 1)
+        for action in available_actions:
+            n_actions *= max(action.action_space_size(), 1)
 
         # TODO: incorporate limit on max_changes
         return n_actions
 
-    def explore_features(
+    def explore_actions(
         self,
-        action: Action,
-        features: List[Feature],
+        action_set: ActionSet,
+        actions: List[Action],
         process_execution: ProcessExecution,
         change_size=1,
     ):
-        def evaluate_action(action, process_execution):
+        def evaluate_action_set(
+            action_set: ActionSet, process_execution: ProcessExecution
+        ):
             # Check process outcome after applying changes
-            process_execution_c, recorded_changes = action.apply_changes(
+            process_execution_c, recorded_changes = action_set.apply_changes(
                 process_execution
             )
             outcome_c = self.process_outcome(process_execution_c)
-            action.undo_changes(process_execution_c, recorded_changes)
+            action_set.undo_changes(process_execution_c, recorded_changes)
 
             return outcome_c == self.counterfactual_label
 
-        max_change_size_delta = change_size - action.action_size()
+        max_change_size_delta = change_size - action_set.action_size()
 
-        next_actions = []
-        selected_actions = []
-        features_no_change = []
-        explored_features = []
-        for feature in features:
-            explored_features.append(feature)
-            current_change_value = action.get_change_value(feature)
+        explore_next = []
+        selected_action_sets = []
+        actions_no_change = []
+        explored_actions = []
+        for action in actions:
+            explored_actions.append(action)
+            current_change_value = action_set.get_change_value(action)
 
-            # Only explore features that have not been explored in this layer yet
-            # as the order of features does not matter
-            next_features = {f for f in features if f not in explored_features}
-            explored_feature = False
-            for change_value in feature.action_space(
+            # Only explore actions that have not been explored in this layer yet
+            # as the order of actions does not matter
+            next_actions = {a for a in actions if a not in explored_actions}
+            explored_action_set = False
+            for change_value in action.action_space(
                 current_change_value, max_change_size_delta
             ):
-                explored_feature = True
-                action_prime = copy(action)
-                action_prime.set_change_value(feature, change_value)
+                explored_action_set = True
+                action_set_prime = copy(action_set)
+                action_set_prime.set_change_value(action, change_value)
 
-                eval_result = evaluate_action(action_prime, process_execution)
+                eval_result = evaluate_action_set(action_set_prime, process_execution)
                 if eval_result:
-                    selected_actions.append(copy(action_prime))
+                    selected_action_sets.append(copy(action_set_prime))
 
-                # If feature actions space is not empty after selected change value
+                # If action actions space is not empty after selected change value
                 if has_value(
-                    feature.action_space(
-                        change_value, self.max_change_size - action.action_size()
+                    action.action_space(
+                        change_value, self.max_change_size - action_set.action_size()
                     )
                 ):
-                    next_features.add(feature)
+                    next_actions.add(action)
 
-                next_actions.append((action_prime, next_features))
+                explore_next.append((action_set_prime, next_actions))
 
-            if not explored_feature:
-                features_no_change.append(feature)
+            if not explored_action_set:
+                actions_no_change.append(action)
 
-        # Take action to next layer with 'unexplored' features
-        if features_no_change:
-            next_actions.append((action, features_no_change))
+        # Take action to next layer with 'unexplored' actions
+        if actions_no_change:
+            explore_next.append((action_set, actions_no_change))
 
-        return next_actions, selected_actions
+        return explore_next, selected_action_sets
 
     def search_layer(
         self,
-        actions_features: List[Tuple[Action, List[Feature]]],
+        actions_to_explore: List[Tuple[ActionSet, List[Action]]],
         process_execution: ProcessExecution,
         change_size=1,
-    ):
+    ) -> List | None:
         """
         Recursively enumerate possible actions to find counterfactuals.
         Args:
-            actions_features (List[Tuple[Action, List[Feature]]]): Actions from preceding search step with list of features that can still be modified.
+            actions_to_explore (List[Tuple[ActionSet, List[Action]]]): ActionSets from preceding search step with list of actions that can still be modified.
             process_execution (ProcessExecution): The original process execution.
             change_size: Change size to search actions for.
         """
@@ -149,47 +151,62 @@ class TreeSearchCounterFactual:
 
         self.logger.info(
             "Expanding %s actions for change_size %s",
-            len(actions_features),
+            len(actions_to_explore),
             change_size,
         )
 
-        next_actions_features = []
-        selected_actions = []
-        for action, features in actions_features:
-            explored, selected = self.explore_features(
-                action, features, process_execution, change_size
+        next_actions_to_explore = []
+        selected_action_sets = []
+        for action_set, actions in actions_to_explore:
+            explored, selected = self.explore_actions(
+                action_set, actions, process_execution, change_size
             )
 
             # Collect distinct next actions
             self.logger.debug("Explored %s actions", len(explored))
-            for next_action in explored:
-                if next_action not in next_actions_features:
-                    next_actions_features.append(next_action)
+            for explore_next in explored:
+                if explore_next not in next_actions_to_explore:
+                    next_actions_to_explore.append(explore_next)
 
             # Collect distinct selected actions
-            self.logger.info("Found counterfactual: %s", selected)
             if selected:
-                selected_actions.append(selected)
+                self.logger.info("Found counterfactual: %s", selected)
+                selected_action_sets.extend(selected)
                 break
 
         if self.log_level == logging.DEBUG:
-            with open(f"{self.log_file}-next_actions_features-{change_size}", "w") as f:
+            with open(
+                f"{self.log_file}-next_actions_to_explore-{change_size}", "w"
+            ) as f:
                 f.write(
                     "\n".join(
-                        [f"{item[0]}\n\t{item[1]}" for item in next_actions_features]
+                        [f"{item[0]}\n\t{item[1]}" for item in next_actions_to_explore]
                     )
                 )
 
         # Return when valid counterfactual actions are found
-        if selected_actions:
-            return selected_actions
+        if selected_action_sets:
+            return selected_action_sets
 
         # Start next search layer
         return self.search_layer(
-            next_actions_features,
+            next_actions_to_explore,
             process_execution,
             change_size=change_size + self.step_change_size,
         )
+
+    def search_depth_first(
+        self,
+        actions_grouped: List[List[Action]],
+        process_execution: ProcessExecution,
+    ) -> List | None:
+        for actions_group in actions_grouped:
+            selected = self.search_layer(
+                actions_to_explore=[(ActionSet(), actions_group)],
+                process_execution=process_execution,
+            )
+            if selected:
+                return selected
 
     def _configure_logger(self):
         logger = logging.getLogger(__name__)
@@ -243,15 +260,15 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
 
     def search_layer(
         self,
-        actions_features: List[Tuple[Action, List[Feature]]],
+        actions_actions: List[Tuple[ActionSet, List[Action]]],
         process_execution: ProcessExecution,
         change_size=1,
     ):
         """
         Recursively enumerate possible actions to find counterfactuals.
-        Explore features on a layer in parallel.
+        Explore actions on a layer in parallel.
         Args:
-            actions_features (List[Tuple[Action, List[Feature]]]): Actions from preceding search step with list of features that can still be modified.
+            actions_actions (List[Tuple[ActionSet, List[Action]]]): ActionSets from preceding search step with list of actions that can still be modified.
             process_execution (ProcessExecution): The original process execution.
             change_size: Change size to search actions for.
         """
@@ -265,25 +282,23 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
 
         self.logger.info(
             "Expanding %s actions for change_size %s",
-            len(actions_features),
+            len(actions_actions),
             change_size,
         )
 
-        next_actions_features = []
+        next_actions_actions = []
         selected_actions = []
         evaluate_args = [
-            (action, features, process_execution, change_size)
-            for action, features in actions_features
+            (action, actions, process_execution, change_size)
+            for action, actions in actions_actions
         ]
 
         with mp.Pool(self.num_workers) as pool:
-            for explored, selected in pool.starmap(
-                self.explore_features, evaluate_args
-            ):
+            for explored, selected in pool.starmap(self.explore_actions, evaluate_args):
                 # Collect distinct next actions
                 for next_action in explored:
-                    if next_action not in next_actions_features:
-                        next_actions_features.append(next_action)
+                    if next_action not in next_actions_actions:
+                        next_actions_actions.append(next_action)
 
                 # Collect distinct selected actions
                 for selected_action in selected:
@@ -292,7 +307,7 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
 
         if self.log_level == logging.DEBUG:
             with open(f"{self.log_file}-explored_actions-{change_size}", "w") as f:
-                f.write("\n".join([f"{item[0]}" for item in next_actions_features]))
+                f.write("\n".join([f"{item[0]}" for item in next_actions_actions]))
 
         # Return when valid counterfactual actions are found
         if selected_actions:
@@ -300,7 +315,7 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
 
         # Start next search layer
         return self.search_layer(
-            next_actions_features,
+            next_actions_actions,
             process_execution,
             change_size=change_size + self.step_change_size,
         )

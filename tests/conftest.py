@@ -9,7 +9,7 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 from process_execution.process_execution import ProcessExecution
-from tree_search.feature import (
+from tree_search.action import (
     NodeAttributeNumeric,
     NodeAttributeCategorical,
 )
@@ -24,8 +24,8 @@ def simple_process_execution():
 
 
 @pytest.fixture
-def numeric_feature():
-    """A numeric feature whose attribute "x" can be changed between -2 and 2."""
+def numeric_action():
+    """A numeric action whose attribute "x" can be changed between -2 and 2."""
     return NodeAttributeNumeric(
         node_id="n1",
         attribute_name="x",
@@ -37,8 +37,8 @@ def numeric_feature():
 
 
 @pytest.fixture
-def categorical_feature():
-    """A categorical feature representing a color attribute."""
+def categorical_action():
+    """A categorical action representing a color attribute."""
     return NodeAttributeCategorical(
         node_id="n1",
         attribute_name="color",

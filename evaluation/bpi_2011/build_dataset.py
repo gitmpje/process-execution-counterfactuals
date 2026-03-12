@@ -101,7 +101,7 @@ def process_time(process_execution_graph: Graph):
 
 
 normalize = True
-feature_per_category = True
+one_hot_encoding = True
 dataset = []
 node_types_set = set()
 edge_types_set = set()
@@ -122,7 +122,7 @@ for idx, obj in enumerate(viewpoint_objects):
         viewpoint=viewpoint,
         add_reverse_edges=False,
         normalize=normalize,
-        feature_per_category=feature_per_category,
+        one_hot_encoding=one_hot_encoding,
     )
 
     # Set graph-level y if graph_y_function was provided
@@ -153,7 +153,7 @@ metadata = Metadata(
     edge_types=list(edge_types_set),
     feat_label_dict=feat_label_dict,
     normalized=normalize,
-    feature_per_category=feature_per_category,
+    one_hot_encoding=one_hot_encoding,
 )
 
 with open(path_metadata, "w") as f:

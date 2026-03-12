@@ -1,15 +1,20 @@
 import pandas as pd
 import pytest
 
-from tree_search.feature_helpers import (
+from torch import tensor, zeros
+from typing import Dict
+
+from tree_search.action_helpers import (
     _extract_attr,
-    build_object_substitution_features,
-    build_node_deletion_features,
+    build_object_substitution_actions,
+    build_node_deletion_actions,
     _parse_value_spec,
-    build_node_attribute_features,
+    build_node_attribute_actions,
     construct_attribute_spec_dict,
+    get_nodes_by_importance,
+    get_feature_labels_by_importance,
 )
-from tree_search.feature import (
+from tree_search.action import (
     EventNodeDeletion,
     ObjectNodeDeletion,
     NodeAttributeNumeric,
@@ -19,9 +24,84 @@ from tree_search.feature import (
 from process_execution.process_execution import ProcessExecution
 
 
+class DummyExplanation:
+    """Minimal stand-in for torch_geometric.explain.HeteroExplanation."""
+
+    def __init__(self, data: Dict[str, dict]):
+        # data maps node_type -> dict with potentially 'node_mask'
+        self._data = data
+        self.node_types = list(data.keys())
+
+    def __getitem__(self, key):
+        return self._data.get(key)
+
+    def get_node_store(self, node_type):
+        # Return a dict-like object with key 'x' as required by the utility.
+        mask = self._data.get(node_type, {})
+        mask_tensor = mask.get("node_mask")
+        if mask_tensor is None:
+            num_feats = 0
+        else:
+            if mask_tensor.dim() == 1:
+                num_feats = mask_tensor.size(0)
+            else:
+                num_feats = mask_tensor.size(-1)
+        return {"x": zeros((1, num_feats))}
+
+
+# ---------------------------------------------------------------------------
+# tests for get_nodes_by_importance
+# ---------------------------------------------------------------------------
+
+
+def test_get_nodes_by_importance_basic():
+    mask = tensor([0.1, 0.5, 0.2])
+    expl = DummyExplanation({"evt": {"node_mask": mask}})
+    labels = {"evt": ["a", "b", "c"]}
+    out = get_nodes_by_importance(expl, labels)
+    # should be sorted descending by importance
+    assert [d["label"] for d in out] == ["b", "c", "a"]
+    # top_k limit
+    assert len(get_nodes_by_importance(expl, labels, top_k=2)) == 2
+
+
+def test_get_nodes_by_importance_multi_feature():
+    mask = tensor([[0.2, 0.4], [0.1, 0.3]])
+    expl = DummyExplanation({"n1": {"node_mask": mask}})
+    res = get_nodes_by_importance(expl, {})
+    assert len(res) == 2
+
+
+# ---------------------------------------------------------------------------
+# tests for get_feature_labels_by_importance
+# ---------------------------------------------------------------------------
+
+
+def test_get_feature_labels_simple():
+    # two nodes, three features
+    mask = tensor([[1.0, 0.0, 2.0], [0.5, 1.5, 0.0]])
+    expl = DummyExplanation({"type1": {"node_mask": mask}})
+    labels = {"type1": ["f1", "f2", "f3"]}
+    out = get_feature_labels_by_importance(expl, labels)
+    assert "type1" in out
+    assert out["type1"][0]["feature"] == "f3"
+
+
+def test_get_feature_labels_per_category_and_topk():
+    mask = tensor([[1.0, 2.0], [3.0, 4.0]])
+    expl = DummyExplanation({"t": {"node_mask": mask}})
+    feat_labels = {"t": ["foo[bar]", "foo[baz]"]}
+    out = get_feature_labels_by_importance(
+        expl, feat_labels, one_hot_encoding=True, top_k=1
+    )
+    assert out["t"][0]["feature"] == "foo"
+    assert len(out["t"]) == 1
+
+
 # ---------------------------------------------------------------------------
 # _extract_attr
 # ---------------------------------------------------------------------------
+
 
 def test_extract_attr_from_dict():
     assert _extract_attr({"attr": {"x": 1}}) == {"x": 1}
@@ -29,17 +109,18 @@ def test_extract_attr_from_dict():
 
 
 # ---------------------------------------------------------------------------
-# build_node_deletion_features
+# build_node_deletion_actions
 # ---------------------------------------------------------------------------
 
-def test_build_node_deletion_features_event_object():
+
+def test_build_node_deletion_actions_event_object():
     nodes = [
         ("e1", {"attr": {"type": "EVENT"}}),
         ("o1", {"attr": {"type": "OBJECT", "ocel:type": "Foo"}}),
         ("o2", {"attr": {"type": "OBJECT", "ocel:type": "View"}}),
     ]
     # viewpoint filters out o2
-    feats = build_node_deletion_features(
+    feats = build_node_deletion_actions(
         nodes, object_type_column="ocel:type", viewpoint="View"
     )
     assert any(isinstance(f, EventNodeDeletion) for f in feats)
@@ -51,6 +132,7 @@ def test_build_node_deletion_features_event_object():
 # _parse_value_spec
 # ---------------------------------------------------------------------------
 
+
 def test_parse_value_spec_tuple_and_range():
     assert _parse_value_spec((0, 10, 2)) == (0, 10, 2)
     assert _parse_value_spec(range(0, 5, 2)) == (0, 5, 2)
@@ -59,16 +141,17 @@ def test_parse_value_spec_tuple_and_range():
 
 
 # ---------------------------------------------------------------------------
-# build_node_attribute_features
+# build_node_attribute_actions
 # ---------------------------------------------------------------------------
 
-def test_build_node_attribute_features_numeric_and_cat():
+
+def test_build_node_attribute_actions_numeric_and_cat():
     nodes = [
         ("n1", {"attr": {"type": "EVENT", "a": 5, "b": "red"}}),
         ("n2", {"attr": {"type": "OBJECT", "a": 1}}),
     ]
     spec = {"a": (0, 10, 5), "b": ["red", "blue"]}
-    feats = build_node_attribute_features(nodes, spec, node_type="EVENT")
+    feats = build_node_attribute_actions(nodes, spec, node_type="EVENT")
     assert any(isinstance(f, NodeAttributeNumeric) for f in feats)
     assert any(isinstance(f, NodeAttributeCategorical) for f in feats)
     # verify values preserved
@@ -79,8 +162,9 @@ def test_build_node_attribute_features_numeric_and_cat():
 
 
 # ---------------------------------------------------------------------------
-# build_object_substitution_features
+# build_object_substitution_actions
 # ---------------------------------------------------------------------------
+
 
 def test_build_object_substitution_simple_graph():
     # target graph with one object and one event connected by E2O
@@ -95,7 +179,7 @@ def test_build_object_substitution_simple_graph():
         ("o2", {"attr": {"type": "OBJECT", "ocel:type": "T"}}),
     ]
 
-    features = build_object_substitution_features(
+    actions = build_object_substitution_actions(
         target_nodes,
         ocel_nodes,
         p,
@@ -103,8 +187,8 @@ def test_build_object_substitution_simple_graph():
         check=lambda a, b: True,
         attribute_spec_dict={},
     )
-    assert len(features) == 1
-    feat = features[0]
+    assert len(actions) == 1
+    feat = actions[0]
     assert isinstance(feat, ObjectNodeSubstitution)
     # substitution_objects should include o2 only
     assert any(sub[0] == "o2" for sub in feat.substitution_objects)
@@ -114,6 +198,7 @@ def test_build_object_substitution_simple_graph():
 # ---------------------------------------------------------------------------
 # construct_attribute_spec_dict
 # ---------------------------------------------------------------------------
+
 
 def make_fake_ocel():
     class FakeOCEL:

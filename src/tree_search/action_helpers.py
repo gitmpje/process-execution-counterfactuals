@@ -1,8 +1,10 @@
 from typing import Any, Callable, Dict, Iterable, List, Tuple
 
 from networkx import Graph
+from torch import Tensor
+from torch_geometric.explain import HeteroExplanation
 
-from tree_search.feature import (
+from tree_search.action import (
     EventNodeDeletion,
     NodeAttributeCategorical,
     NodeAttributeNumeric,
@@ -22,7 +24,110 @@ def _extract_attr(node_data: Any) -> Dict:
     return {}
 
 
-def build_object_substitution_features(
+def get_nodes_by_importance(
+    explanation: HeteroExplanation, node_label_dict: Dict[str, List[str]], top_k=None
+):
+    """Return a list of nodes ordered by importance (descending).
+
+    Each entry is a dict with keys: `node_type`, `node_index`, `label`, `importance`.
+    """
+    results = []
+    for node_type in explanation.node_types:
+        info = explanation[node_type]
+        if info is None:
+            continue
+        mask = info.get("node_mask")
+        if mask is None:
+            continue
+        if not isinstance(mask, Tensor):
+            continue
+
+        # Reduce per-feature masks to a scalar per node by averaging features
+        if mask.dim() > 1 and mask.size(-1) > 1:
+            scalar = mask.mean(dim=-1)
+        else:
+            scalar = mask.squeeze(-1) if mask.dim() > 1 else mask
+
+        scalar = scalar.detach().cpu()
+        labels = node_label_dict.get(node_type, []) or [
+            f"{node_type}_{i}" for i in range(scalar.size(0))
+        ]
+
+        for i, v in enumerate(scalar.tolist()):
+            lbl = labels[i] if i < len(labels) else f"{node_type}_{i}"
+            results.append(
+                {
+                    "node_type": node_type,
+                    "node_index": i,
+                    "label": lbl,
+                    "importance": float(v),
+                }
+            )
+
+    results_sorted = sorted(results, key=lambda x: x["importance"], reverse=True)
+    if top_k is not None:
+        return results_sorted[:top_k]
+    return results_sorted
+
+
+def get_feature_labels_by_importance(
+    explanation: HeteroExplanation,
+    feat_label_dict: Dict[str, List[str]],
+    one_hot_encoding: bool = False,
+    top_k=None,
+):
+    """Return per-node-type feature labels ordered by importance.
+
+    For each node type, features are aggregated across nodes (mean) and
+    returned as a list of dicts with keys: `feature`, `importance`.
+    """
+    out = {}
+    for node_type in explanation.node_types:
+        node_expl = explanation[node_type]
+        if node_expl is None:
+            continue
+        mask = node_expl.get("node_mask")
+        if mask is None or not isinstance(mask, Tensor):
+            continue
+
+        # Expect mask shape [num_nodes, num_features] for per-feature importances
+        num_feats = explanation.get_node_store(node_type)["x"].size(1)
+        if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
+            # No per-feature importance available for this node type
+            continue
+
+        # Aggregate across nodes -> per-feature importance
+        per_feat = mask.mean(dim=0).detach().cpu()
+        feat_labels = feat_label_dict.get(node_type, []) or [
+            f"feat_{i}" for i in range(per_feat.size(0))
+        ]
+
+        if one_hot_encoding:
+            # group feature importances by base category extracted from label
+            # e.g. 'ocel:activity[Register Customer Order]' -> 'ocel:activity'
+            category_vals: Dict[str, List[float]] = {}
+            for i, v in enumerate(per_feat.tolist()):
+                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                base = fname.split("[")[0] if "[" in fname else fname
+                category_vals.setdefault(base, []).append(v)
+
+            pairs = [
+                {"feature": cat, "importance": float(sum(vals) / len(vals))}
+                for cat, vals in category_vals.items()
+            ]
+        else:
+            pairs = []
+            for i, v in enumerate(per_feat.tolist()):
+                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                pairs.append({"feature": fname, "importance": float(v)})
+
+        pairs_sorted = sorted(pairs, key=lambda x: x["importance"], reverse=True)
+        out[node_type] = pairs_sorted[:top_k] if top_k is not None else pairs_sorted
+
+    return out
+
+
+def build_object_substitution_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     ocel_nodes: Iterable[Tuple[Any, Any]],
     graph: Graph,
@@ -30,7 +135,7 @@ def build_object_substitution_features(
     check: Callable[[Dict, Dict], bool] = lambda a, b: True,
     attribute_spec_dict: Dict[str, Any] = None,
 ) -> List[ObjectNodeSubstitution]:
-    """Construct ObjectNodeSubstitution features from target graph nodes.
+    """Construct ObjectNodeSubstitution actions from target graph nodes.
 
     Parameters
     - target_nodes: iterable of (node_id, node_data) from the target process execution
@@ -41,7 +146,7 @@ def build_object_substitution_features(
 
     Returns a list of `ObjectNodeSubstitution` instances.
     """
-    features: List[ObjectNodeSubstitution] = []
+    actions: List[ObjectNodeSubstitution] = []
 
     discretized_attributes = {}
     for attr, spec in attribute_spec_dict.items():
@@ -87,7 +192,7 @@ def build_object_substitution_features(
             except Exception:
                 event_ids = []
 
-        features.append(
+        actions.append(
             ObjectNodeSubstitution(
                 object_id=node_id,
                 object_data=node_data,
@@ -97,21 +202,21 @@ def build_object_substitution_features(
             )
         )
 
-    return features
+    return actions
 
 
-def build_node_deletion_features(
+def build_node_deletion_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     nodes_order: Iterable[Any] = None,
     viewpoint: str = None,
     object_type_column: str = "",
 ) -> List[EventNodeDeletion]:
-    """Construct EventNodeDeletion or ObjectNodeDeletion features for respectively event and object nodes.
+    """Construct EventNodeDeletion or ObjectNodeDeletion actions for respectively event and object nodes.
 
     Expects `target_nodes` as an iterable of (node_id, node_data) where node_data
     may be the attribute dict or a mapping containing an `attr` key.
     """
-    features: List[EventNodeDeletion | ObjectNodeDeletion] = []
+    actions: List[EventNodeDeletion | ObjectNodeDeletion] = []
     target_map = dict(target_nodes)
     nodes_order = nodes_order if nodes_order is not None else target_map.keys()
 
@@ -119,13 +224,13 @@ def build_node_deletion_features(
         node_data = target_map[node_id]
         attr = _extract_attr(node_data)
         if attr.get("type", "") == "EVENT":
-            features.append(EventNodeDeletion(deletion_options=[[node_id]]))
+            actions.append(EventNodeDeletion(deletion_options=[[node_id]]))
         elif attr.get("type", "") == "OBJECT":
             # Skip viewpoint nodes
             if attr.get(object_type_column, "") == viewpoint:
                 continue
-            features.append(ObjectNodeDeletion(deletion_options=[[node_id]]))
-    return features
+            actions.append(ObjectNodeDeletion(deletion_options=[[node_id]]))
+    return actions
 
 
 def _parse_value_spec(v):
@@ -146,7 +251,7 @@ def _parse_value_spec(v):
     raise ValueError(f"Unsupported value specification: {v}")
 
 
-def build_node_attribute_features(
+def build_node_attribute_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     attribute_spec_dict: Dict[str, Any],
     node_type: str = "EVENT",
@@ -154,7 +259,7 @@ def build_node_attribute_features(
     attr_order: Dict[str, List[str]] = None,
     object_type_column: str = "ocel:type",
 ) -> List:
-    """Construct NodeAttributeNumeric and NodeAttributeCategorical features.
+    """Construct NodeAttributeNumeric and NodeAttributeCategorical actions.
 
     `attribute_spec_dict` maps attribute name -> spec where spec is either:
       - a tuple/list `(value_step, value_max)` (numeric)
@@ -163,7 +268,7 @@ def build_node_attribute_features(
     The function returns a list containing instances of `NodeAttributeNumeric`
     and `NodeAttributeCategorical` as appropriate.
     """
-    features: List = []
+    actions: List = []
 
     target_map = dict(target_nodes)
     if nodes_order is None:
@@ -210,7 +315,7 @@ def build_node_attribute_features(
                     vmin, vmax, step = _parse_value_spec(spec)
                 except ValueError:
                     continue
-                features.append(
+                actions.append(
                     NodeAttributeNumeric(
                         node_id=node_id,
                         attribute_name=attr_name,
@@ -232,7 +337,7 @@ def build_node_attribute_features(
                 if not category_values:
                     continue
                 value_original = attr.get(attr_name)
-                features.append(
+                actions.append(
                     NodeAttributeCategorical(
                         node_id=node_id,
                         attribute_name=attr_name,
@@ -241,7 +346,7 @@ def build_node_attribute_features(
                     )
                 )
 
-    return features
+    return actions
 
 
 def construct_attribute_spec_dict(
@@ -333,8 +438,10 @@ def construct_attribute_spec_dict(
 
 
 __all__ = [
-    "build_object_substitution_features",
-    "build_node_deletion_features",
-    "build_node_attribute_features",
+    "get_nodes_by_importance",
+    "get_feature_labels_by_importance",
+    "build_object_substitution_actions",
+    "build_node_deletion_actions",
+    "build_node_attribute_actions",
     "construct_attribute_spec_dict",
 ]

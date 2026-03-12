@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Any
 
 from process_execution.process_execution import extract_process_execution
 from gnn.hetero_graph_data import build_hetero_data
-from tree_search.feature_selection import (
+from tree_search.action_helpers import (
     get_nodes_by_importance,
     get_feature_labels_by_importance,
 )
@@ -29,7 +29,7 @@ class Metadata:
     edge_types: List[str]
     feat_label_dict: Dict[str, List[str]]
     normalized: bool
-    feature_per_category: bool
+    one_hot_encoding: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -40,7 +40,7 @@ class Metadata:
             "edge_types": self.edge_types,
             "feat_label_dict": self.feat_label_dict,
             "normalized": self.normalized,
-            "feature_per_category": self.feature_per_category,
+            "one_hot_encoding": self.one_hot_encoding,
         }
 
     @classmethod
@@ -56,7 +56,7 @@ class Metadata:
             edge_types=metadata_dict.get("edge_types"),
             feat_label_dict=metadata_dict.get("feat_label_dict"),
             normalized=metadata_dict.get("normalized"),
-            feature_per_category=metadata_dict.get("feature_per_category"),
+            one_hot_encoding=metadata_dict.get("one_hot_encoding"),
         )
 
 
@@ -244,7 +244,7 @@ def build_process_execution_dataset(
     event_activity_col: str = "ocel:activity",
     add_reverse_edges: bool = False,
     normalize: bool = False,
-    feature_per_category: bool = False,
+    one_hot_encoding: bool = False,
     path_pe_dataset: Optional[str] = None,
 ) -> Tuple[List[HeteroData], Metadata]:
     """
@@ -309,7 +309,7 @@ def build_process_execution_dataset(
                 node_y_mapping=node_y_mapping,
                 add_reverse_edges=add_reverse_edges,
                 normalize=normalize,
-                feature_per_category=feature_per_category,
+                one_hot_encoding=one_hot_encoding,
             )
 
             # Set graph-level y if graph_y_function was provided
@@ -350,7 +350,7 @@ def build_process_execution_dataset(
         edge_types=list(edge_types_set),
         feat_label_dict=feat_label_dict,
         normalized=normalize,
-        feature_per_category=feature_per_category,
+        one_hot_encoding=one_hot_encoding,
     )
 
     return dataset, metadata
@@ -374,7 +374,7 @@ def generate_explanation(
         event_activity_col=event_activity_col,
         viewpoint=metadata.viewpoint,
         normalize=metadata.normalized,
-        feature_per_category=metadata.feature_per_category,
+        one_hot_encoding=metadata.one_hot_encoding,
     )
 
     data = data.to(device)
@@ -417,7 +417,7 @@ def generate_explanation(
         top_features = get_feature_labels_by_importance(
             explanation,
             metadata.feat_label_dict,
-            feature_per_category=metadata.feature_per_category,
+            one_hot_encoding=metadata.one_hot_encoding,
             top_k=10,
         )
         print("\nTop features by importance per node type:")
