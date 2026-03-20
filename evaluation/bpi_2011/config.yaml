@@ -2,5 +2,59 @@ dataset:
   path_xes: "data/Hospital_log.xes.gz"
   path_dataset: "data/dataset-pe.pt"
   path_metadata: "data/metadata-pe.json"
-  path_model: "data/model-pe.pth"
+  exclude_attributes:
+    - "ocel:eid"
+    - "ocel:timestamp"
+    - "ocel:oid"
+    - "ocel:type"
+    - "case:End date"
+    - "case:Start date"
+    - "case:End date1"
+    - "case:Start date1"
+    - "case:End date2"
+    - "case:Start date2"
+    - "case:End date3"
+    - "case:Start date3"
+    - "case:End date4"
+    - "case:Start date4"
+    - "case:End date5"
+    - "case:Start date5"
+    - "case:End date6"
+    - "case:Start date6"
+    - "case:End date7"
+    - "case:Start date7"
+    - "case:End date8"
+    - "case:Start date8"
+    - "case:End date9"
+    - "case:Start date9"
+    - "case:End date10"
+    - "case:Start date10"
+    - "case:End date11"
+    - "case:Start date11"
+    - "case:End date12"
+    - "case:Start date12"
+    - "case:End date13"
+    - "case:Start date13"
+    - "case:End date14"
+    - "case:Start date14"
+    - "case:End date15"
+    - "case:Start date15"
+
+process_execution:
   viewpoint: "case:concept:name"
+
+gnn:
+  path_model: "data/model-pe.pth"
+  num_layers: 1
+  dropout: 0.1
+  n_epochs: 100
+  start_patience: 25
+  learning_rate: 0.01
+
+counterfactual:
+  viewpoint_object_id: "00000001"
+  depth_first: "node"
+  num_bins: 2
+  max_change_size: 5
+  node_importance_threshold: 0.001
+  attr_importance_threshold: 0.01

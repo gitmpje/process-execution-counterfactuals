@@ -417,6 +417,7 @@ def generate_explanation(
         top_features = get_feature_labels_by_importance(
             explanation,
             metadata.feat_label_dict,
+            node_cat_keys=metadata.node_cat_keys,
             one_hot_encoding=metadata.one_hot_encoding,
             top_k=10,
         )

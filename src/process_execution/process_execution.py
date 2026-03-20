@@ -120,7 +120,7 @@ def extract_process_execution(
         ]
         edges_traced.update(edges_event_object)
 
-        trace_objects = [v for u, v, k in edges_event_object]
+        trace_objects = [v for _, v, _ in edges_event_object]
         objects_traced.update(trace_objects)
 
         selected_objects = [

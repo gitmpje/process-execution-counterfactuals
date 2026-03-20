@@ -12,7 +12,7 @@ from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -41,12 +41,28 @@ with open(path_metadata, "r") as f:
     metadata_dict = json.load(f)
 metadata = Metadata.from_dict(metadata_dict)
 
+labels = [data.y for data in dataset]
+class_weights = torch.tensor([len(labels) / (len(labels) - sum(labels)), 1.0])
 train_idx, test_idx = train_test_split(
     list(range(len(dataset))),
     test_size=0.1,
     random_state=1,
+    stratify=labels,
 )
-train_idx, val_idx = train_test_split(train_idx, test_size=0.1, random_state=1)
+
+train_labels = [labels[i] for i in train_idx]
+train_idx, val_idx = train_test_split(
+    train_idx,
+    test_size=0.1,
+    random_state=1,
+    stratify=train_labels,
+)
+
+# Oversample minority samples (to deal with class imbalance)
+train_minority_idx = [i for i in train_idx if labels[i] == 0]
+oversampled_idx = train_idx + train_minority_idx * int(
+    class_weights[0] / len(train_minority_idx)
+)
 
 train_ds = Subset(dataset, train_idx)
 val_ds = Subset(dataset, val_idx)
@@ -68,7 +84,7 @@ trainer = HANConvTrainerGraphLevel(
     model=model,
     viewpoint=metadata.viewpoint,
     device=device,
-    criterion=torch.nn.CrossEntropyLoss(),
+    criterion=torch.nn.CrossEntropyLoss(),  # weight=class_weights
     output_type="binary",
 )
 trainer.train(
@@ -81,3 +97,18 @@ trainer.train(
 )
 
 torch.save(model, path_model)
+
+# %%
+pred_false = []
+for i, data in enumerate(dataset):
+    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+    batch_dict = {
+        node_type: torch.zeros(
+            data[node_type].num_nodes, dtype=torch.long, device=device
+        )
+        for node_type in metadata.node_types
+    }
+    out = model(data.x_dict, data.edge_index_dict, batch_dict)
+
+    if not bool(out.argmax(dim=-1).cpu().item()):
+        pred_false.append(i)

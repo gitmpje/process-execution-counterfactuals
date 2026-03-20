@@ -5,6 +5,7 @@ import pm4py
 import torch
 import yaml
 
+from copy import deepcopy
 from networkx import Graph
 
 from tree_search.action_helpers import (
@@ -20,21 +21,25 @@ from tree_search.tree_search import TreeSearchCounterFactual
 
 from gnn.hetero_graph_data import build_hetero_data
 from gnn.utils import Metadata, generate_explanation
-from utils import convert_event_log_ocel
+from process_execution.process_execution import extract_process_execution
+
+from utils import clean_ocel_dataset
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
 # Dataset
 dataset_cfg = cfg["dataset"]
-path_xes = dataset_cfg["path_xes"]
+path_ocel = dataset_cfg["path_ocel"]
 path_metadata = dataset_cfg["path_metadata"]
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
 viewpoint = process_execution_cfg["viewpoint"]
+process_execution_object_types = process_execution_cfg["object_types"]
+process_execution_target_activity = process_execution_cfg["target_activity"]
 
 # GNN
 gnn_cfg = cfg["gnn"]
@@ -42,27 +47,27 @@ path_model = gnn_cfg["path_model"]
 
 # Counterfactual search
 counterfactual_cfg = cfg["counterfactual"]
-viewpoint_object_id = counterfactual_cfg["viewpoint_object_id"]
+viewpoint_event_id = counterfactual_cfg["viewpoint_event_id"]
 depth_first = counterfactual_cfg.get("depth_first")
 num_bins = counterfactual_cfg["num_bins"]
 max_change_size = counterfactual_cfg["max_change_size"]
 node_importance_threshold = counterfactual_cfg["node_importance_threshold"]
 attr_importance_threshold = counterfactual_cfg["attr_importance_threshold"]
 
+
 # Load metadata
 with open(path_metadata, "r") as f:
     metadata_dict = json.load(f)
 metadata = Metadata.from_dict(metadata_dict)
 
-# %% Load event log
-event_log = pm4py.read_xes(path_xes)
+# %% Load OCEL
+ocel = pm4py.read_ocel2_json(path_ocel)
+ocel = clean_ocel_dataset(ocel)
 
-# %% Convert event log to OCEL and Networkx graph
-ocel, ocel_nx = convert_event_log_ocel(event_log, viewpoint)
+# %% Convert OCEL to Networkx graph
+ocel_nx = pm4py.convert_ocel_to_networkx(ocel)
 
 # %% Load model and define process outcome function
-
-# Load trained model
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = torch.load(path_model, weights_only=False)
 model = model.to(device)
@@ -91,21 +96,27 @@ def process_outcome(p: Graph) -> bool:
 
     data = data.to(device)
 
-    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
-    batch_dict = {
-        node_type: torch.zeros(
-            data[node_type].num_nodes, dtype=torch.long, device=device
-        )
-        for node_type in metadata.node_types
-    }
-    out = model(data.x_dict, data.edge_index_dict, batch_dict)
+    try:
+        # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+        batch_dict = {
+            node_type: torch.zeros(
+                data[node_type].num_nodes if data[node_type].num_nodes else 0,
+                dtype=torch.long,
+                device=device,
+            )
+            for node_type in metadata.node_types
+        }
+        out = model(data.x_dict, data.edge_index_dict, batch_dict)
+
+    except Exception as e:
+        print(f"Error occurred while processing graph: {e}")
+        print(data)
+        raise e
 
     return bool(out.argmax(dim=-1).cpu().item())
 
 
-# %% Configure counterfactual generation (tree search)
-
-# Select process execution to generate counterfactual for
+# %% Construct actions for counterfactual generation (tree search)
 selected_attributes = []
 for node_type in ["EVENT", "OBJECT"]:
     for d in metadata.node_cat_keys[node_type].values():
@@ -123,9 +134,15 @@ attribute_spec_dict = construct_attribute_spec_dict(
 )
 
 # Extract target process execution
-events = set([e for e, _ in ocel_nx.in_edges(viewpoint_object_id)])
-nodes = events | set([viewpoint_object_id])
-target_process_execution = ocel_nx.subgraph(nodes).copy()
+target_process_execution = deepcopy(
+    extract_process_execution(
+        ocel_nx,
+        viewpoint_event_id,
+        object_types=process_execution_object_types,
+        target_activity_type=process_execution_target_activity,
+        backward=True,
+    )
+)
 
 counterfactual_label = not process_outcome(target_process_execution)
 
@@ -243,7 +260,7 @@ tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
     max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
-    log_file="logs/bpi_2011.log",
+    log_file="logs/socel_hinge.log",
 )
 
 print(f"counterfactual_label={counterfactual_label}")
@@ -293,4 +310,6 @@ def visualize_process_execution(
     agraph.draw(output_file_name, prog="dot")
 
 
+_, changes = selected_action_sets[0].apply_changes(target_process_execution)
 visualize_process_execution(target_process_execution)
+selected_action_sets[0].undo_changes(target_process_execution, changes)

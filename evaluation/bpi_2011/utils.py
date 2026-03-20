@@ -21,11 +21,9 @@ def convert_event_log_ocel(event_log: DataFrame, viewpoint: str):
     df_event.drop(columns=["concept:name", "time:timestamp"], inplace=True)
     ocel.events = ocel.events.join(df_event)
 
-    ocel_nx = MultiDiGraph(convert_ocel_to_networkx(ocel))
-
     # Convert timestamp to epoch
-    for _, attr in ocel_nx.nodes(data="attr"):
-        if attr.get("type", "") == "EVENT":
-            attr["epoch"] = attr["ocel:timestamp"].timestamp()
+    ocel.events["epoch"] = ocel.events["ocel:timestamp"].astype(int)
+
+    ocel_nx = MultiDiGraph(convert_ocel_to_networkx(ocel))
 
     return ocel, ocel_nx

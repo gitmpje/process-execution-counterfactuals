@@ -3,7 +3,7 @@ import multiprocessing as mp
 
 from copy import copy
 from logging.handlers import QueueListener, RotatingFileHandler
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from process_execution.process_execution import ProcessExecution
 
@@ -197,16 +197,19 @@ class TreeSearchCounterFactual:
 
     def search_depth_first(
         self,
-        actions_grouped: List[List[Action]],
+        actions_grouped: Dict[str, List[Action]],
         process_execution: ProcessExecution,
     ) -> List | None:
-        for actions_group in actions_grouped:
+        for i, actions_group in actions_grouped.items():
+            self.logger.info("Searching in group %s", i)
             selected = self.search_layer(
                 actions_to_explore=[(ActionSet(), actions_group)],
                 process_execution=process_execution,
             )
             if selected:
                 return selected
+
+        return []
 
     def _configure_logger(self):
         logger = logging.getLogger(__name__)
@@ -287,7 +290,7 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
         )
 
         next_actions_actions = []
-        selected_actions = []
+        selected_action_sets = []
         evaluate_args = [
             (action, actions, process_execution, change_size)
             for action, actions in actions_actions
@@ -302,16 +305,16 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
 
                 # Collect distinct selected actions
                 for selected_action in selected:
-                    if selected_action not in selected_actions:
-                        selected_actions.append(selected_action)
+                    if selected_action not in selected_action_sets:
+                        selected_action_sets.append(selected_action)
 
         if self.log_level == logging.DEBUG:
             with open(f"{self.log_file}-explored_actions-{change_size}", "w") as f:
                 f.write("\n".join([f"{item[0]}" for item in next_actions_actions]))
 
         # Return when valid counterfactual actions are found
-        if selected_actions:
-            return selected_actions
+        if selected_action_sets:
+            return selected_action_sets
 
         # Start next search layer
         return self.search_layer(

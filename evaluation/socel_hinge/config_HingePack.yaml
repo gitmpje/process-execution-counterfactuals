@@ -1,0 +1,38 @@
+dataset:
+  path_ocel: "data/socel_hinge.json"
+  path_dataset: "data/dataset-pe-HingePack.pt"
+  path_metadata: "data/metadata-pe-HingePack.json"
+  exclude_attributes:
+    - "ocel:eid"
+    - "ocel:timestamp"
+    - "ocel:oid"
+    - "ocel:type"
+
+process_execution:
+  viewpoint: "HingePack"
+  viewpoint_activity: "PackHinges"
+  object_types:
+    - "FormedPart"
+    - "Hinge"
+    - "HingePack"
+    - "MalePart"
+    - "SteelPin"
+    - "SteelSheet"
+    - "SteelCoil"
+  target_activity: "SplitSteelSheet"
+
+gnn:
+  path_model: "data/model-pe-HingePack.pth"
+  num_layers: 1
+  dropout: 0.1
+  n_epochs: 100
+  start_patience: 25
+  learning_rate: 0.01
+
+counterfactual:
+  viewpoint_event_id: "e_packhinges_142"
+  depth_first: "node"
+  num_bins: 2
+  max_change_size: 5
+  node_importance_threshold: 0.01
+  attr_importance_threshold: 0.1

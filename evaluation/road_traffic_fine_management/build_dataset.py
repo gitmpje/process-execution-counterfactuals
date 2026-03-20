@@ -7,10 +7,10 @@ import yaml
 
 from collections import Counter
 from networkx import Graph
-from numpy import diff, linspace, where, sign
-from pandas import DataFrame
-from torch import save as tsave, tensor
+from numpy import array, isnan, linspace
+from pandas import Series
 from scipy.stats import gaussian_kde
+from torch import save as tsave, tensor
 
 from gnn.hetero_graph_data import build_hetero_data
 from gnn.utils import (
@@ -31,6 +31,7 @@ dataset_cfg = cfg["dataset"]
 path_xes = dataset_cfg["path_xes"]
 path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
+path_sample = dataset_cfg["path_sample"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
 
 # Process execution
@@ -40,11 +41,17 @@ viewpoint = process_execution_cfg["viewpoint"]
 # %% Load event log
 event_log = pm4py.read_xes(path_xes)
 
+# Select subset of data
+sample_objects = event_log[viewpoint].sample(n=10000)
+with open(path_sample, "w") as f:
+    f.write(",".join(sample_objects))
+event_log_sample = event_log[event_log[viewpoint].isin(sample_objects)]
+
 # %% Convert event log to OCEL and Networkx graph
-ocel, ocel_nx = convert_event_log_ocel(event_log, viewpoint)
+ocel, ocel_nx = convert_event_log_ocel(event_log_sample)
 
 # %% Define features for dataset
-viewpoint_objects = event_log[viewpoint].unique()
+viewpoint_objects = event_log_sample[viewpoint].unique()
 print(f"Number of viewpoint objects selected: {len(viewpoint_objects)}")
 
 NODE_TYPE_OBJECT = "OBJECT"
@@ -53,7 +60,7 @@ NODE_TYPE_EVENT = "EVENT"
 # Define node types
 object_types = list(ocel.objects[ocel.object_type_column].unique())
 event_types = []
-# event_types = list(event_log[ocel.event_activity].unique())
+# event_types = list(event_log["case:concept"].unique())
 
 # Define categoric node attributes
 node_cat_keys = construct_node_cat_keys(
@@ -79,6 +86,13 @@ node_num_keys = construct_node_num_keys(
 
 
 # %%
+object_activities = event_log.groupby(viewpoint)["concept:name"].agg(list)
+
+
+def process_outcome(obj: str):
+    return int("Payment" in object_activities.loc[obj])
+
+
 def process_time(process_execution_graph: Graph):
     events = [
         d["epoch"]
@@ -118,7 +132,8 @@ for idx, obj in enumerate(viewpoint_objects):
     )
 
     # Set graph-level y if graph_y_function was provided
-    y_value = process_time(G)
+    # y_value = process_time(G)
+    y_value = process_outcome(obj)
     hetero_data.y = y_value
 
     dataset.append(hetero_data)
@@ -151,65 +166,53 @@ metadata = Metadata(
 with open(path_metadata, "w") as f:
     json.dump(metadata.to_dict(), f)
 
-# %% Determine threshold
-cases = []
-for i, data in enumerate(dataset):
-    cases.append(
-        {
-            viewpoint: viewpoint_objects[i],
-            "process_time": data.y,
-        }
-    )
-df = DataFrame(cases)
 
-mapping = event_log.set_index(viewpoint)["case:Specialism code:2"]
-mapping = mapping[~mapping.index.duplicated(keep="first")]
-df["case:Specialism code:2"] = df[viewpoint].map(mapping)
+# %% Determine threshold and assign final class y values to each HeteroData
+def find_valleys(values):
+    """
+    Find indices and values of valleys in a list.
+    A valley is an element strictly less than its immediate neighbors.
 
-# Define groups
-data_group_1 = df[df["case:Specialism code:2"] == 7.0]["process_time"]
-data_group_2 = df[df["case:Specialism code:2"] != 7.0]["process_time"]
+    :param values: List of numeric values
+    :return: List of tuples (index, value) for each valley
+    """
+    # Input validation
+    if not isinstance(values, list) or not all(
+        isinstance(x, (int, float)) for x in values
+    ):
+        raise ValueError("Input must be a list of numbers.")
 
-# Estimate KDE
-kde_group_1 = gaussian_kde(data_group_1)
-kde_group_2 = gaussian_kde(data_group_2)
+    valleys = []
+    n = len(values)
 
-# Define a common x-range for evaluation
-x_min = df["process_time"].min() - 1
-x_max = df["process_time"].max() + 1
-x_vals = linspace(x_min, x_max, 500)
+    # Need at least 3 points to have a valley
+    if n < 3:
+        return valleys
 
-# Evaluate KDEs
-y_group_1 = kde_group_1(x_vals)
-y_group_2 = kde_group_2(x_vals)
+    for i in range(1, n - 1):
+        if values[i] < values[i - 1] and values[i] < values[i + 1]:
+            valleys.append((i, values[i]))
 
-# Find intersection points (where difference changes sign)
-diff_groups = y_group_1 - y_group_2
-sign_changes = where(diff(sign(diff_groups)) != 0)[0]
+    return valleys
 
-# Interpolate intersection points for better accuracy
-intersections = []
-for idx in sign_changes:
-    x0, x1 = x_vals[idx], x_vals[idx + 1]
-    y0, y1_diff = diff_groups[idx], diff_groups[idx + 1]
 
-    # Linear interpolation
-    x_intersect = x0 - y0 * (x1 - x0) / (y1_diff - y0)
-    intersections.append(x_intersect)
-threshold = intersections[0]
+p_times = array([data.y for data in dataset if not isnan(data.y)])
+kde = gaussian_kde(p_times)
+x_min = min(p_times)
+x_max = max(p_times)
+x = linspace(x_min, x_max, 500)
+y = kde(x)
 
-data_group_1.plot(kind="kde", label="'Specialism code:2' = 7")
-data_group_2.plot(kind="kde", label="'Specialism code:2' != 7")
+# Use first valley in KDE as threshold
+threshold = x[find_valleys(list(y))[0][0]]
+
+Series(p_times).plot(kind="kde")
 plt.axvline(
     x=threshold,
     color="red",
     linestyle="--",
 )
-plt.legend()
 
-print("Classes:", Counter(df["process_time"].values <= threshold))
-
-# %% Assign final class y values to each HeteroData
 for data in dataset:
     y_orig = data.y
     y_class = int(y_orig <= threshold)
@@ -222,3 +225,5 @@ for data in dataset:
 
 # Overwrite dataset
 tsave(dataset, path_dataset)
+
+print("Classes:", Counter([d.y for d in dataset]))

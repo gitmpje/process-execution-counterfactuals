@@ -1,7 +1,8 @@
+import json
+
 from typing import Any, Dict, List, Tuple
 
 from process_execution.process_execution import ProcessExecution
-
 from tree_search.action import (
     EventNodeDeletion,
     Action,
@@ -10,6 +11,20 @@ from tree_search.action import (
     ObjectNodeDeletion,
     ObjectNodeSubstitution,
 )
+
+INDENTATION = 2
+
+
+def make_json_safe(obj):
+    """Recursively convert Python objects into JSON‑serializable structures."""
+    if isinstance(obj, dict):
+        return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [make_json_safe(v) for v in obj]
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    # Everything else → string fallback
+    return str(obj)
 
 
 class ActionSet:
@@ -36,12 +51,20 @@ class ActionSet:
         )
 
     def __repr__(self):
-        object_substitution = {k: v[0] for k, v in self.object_substitution.items()}
+        # Pre-process substitution dict: original code extracts first element of tuple/list
+        object_substitution = {
+            k: make_json_safe(v[0]) for k, v in self.object_substitution.items()
+        }
 
-        return f"""ActionSet<{id(self)}>
-    node_deletion: {self.node_deletion}
-    object_substitution: {object_substitution}
-    node_attributes_modification: {self.node_attributes_modification}"""
+        return (
+            f"ActionSet<{id(self)}>\n"
+            f"  node_deletion: "
+            f"{json.dumps(make_json_safe(self.node_deletion), indent=INDENTATION)}\n"
+            f"  object_substitution: "
+            f"{json.dumps(object_substitution, indent=INDENTATION)}\n"
+            f"  node_attributes_modification: "
+            f"{json.dumps(make_json_safe(self.node_attributes_modification), indent=INDENTATION)}"
+        )
 
     def __copy__(self):
         """

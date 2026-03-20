@@ -73,6 +73,7 @@ def get_nodes_by_importance(
 def get_feature_labels_by_importance(
     explanation: HeteroExplanation,
     feat_label_dict: Dict[str, List[str]],
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]] = None,
     one_hot_encoding: bool = False,
     top_k=None,
 ):
@@ -82,6 +83,18 @@ def get_feature_labels_by_importance(
     returned as a list of dicts with keys: `feature`, `importance`.
     """
     out = {}
+    category_labels = (
+        {
+            f"{k}[{label}]": k
+            for d1 in node_cat_keys.values()
+            for d2 in d1.values()
+            for k, v in d2.items()
+            for label in v
+        }
+        if node_cat_keys
+        else {}
+    )
+
     for node_type in explanation.node_types:
         node_expl = explanation[node_type]
         if node_expl is None:
@@ -108,7 +121,7 @@ def get_feature_labels_by_importance(
             category_vals: Dict[str, List[float]] = {}
             for i, v in enumerate(per_feat.tolist()):
                 fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
-                base = fname.split("[")[0] if "[" in fname else fname
+                base = category_labels[fname] if fname in category_labels else fname
                 category_vals.setdefault(base, []).append(v)
 
             pairs = [

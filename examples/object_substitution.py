@@ -149,15 +149,15 @@ print(
 )
 
 # %% Run tree search algorithm to find counter factuals
-selected_actions = tree_search.search_layer(
+selected_action_sets = tree_search.search_layer(
     [(ActionSet(), available_actions)],
     target_process_execution,
 )
 
 # %% Display results
-print(f"Number of selected actions: {len(selected_actions)}")
+print(f"Number of selected action sets: {len(selected_action_sets)}")
 
 for selected_action in sorted(
-    selected_actions, key=lambda a: a.action_size(), reverse=True
+    selected_action_sets, key=lambda a: a.action_size(), reverse=True
 ):
     print(f"Change size {selected_action.action_size()}:", selected_action)

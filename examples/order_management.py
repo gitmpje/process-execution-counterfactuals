@@ -191,6 +191,7 @@ attr_ordered = {
     for node_type, features in get_feature_labels_by_importance(
         explanation=target_explanation,
         feat_label_dict=feat_label_dict,
+        node_cat_keys=metadata.node_cat_keys,
         one_hot_encoding=metadata.one_hot_encoding,
     ).items()
 }
@@ -258,15 +259,15 @@ tree_search = TreeSearchCounterFactual(
     log_file="logs/example_gnn_order_management.log",
 )
 
-selected_actions = tree_search.search_layer(
+selected_action_sets = tree_search.search_layer(
     [(ActionSet(), available_actions)],
     target_process_execution,
 )
 
 # %% Display results
-print(f"Number of selected actions: {len(selected_actions)}")
+print(f"Number of selected action sets: {len(selected_action_sets)}")
 for selected_action in sorted(
-    selected_actions, key=lambda a: a.action_size(), reverse=True
+    selected_action_sets, key=lambda a: a.action_size(), reverse=True
 ):
     print(f"Change size {selected_action.action_size()}:", selected_action)
 

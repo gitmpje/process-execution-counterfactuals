@@ -31,6 +31,7 @@ with open(config_file) as f:
 dataset_cfg = cfg["dataset"]
 path_xes = dataset_cfg["path_xes"]
 path_metadata = dataset_cfg["path_metadata"]
+path_sample = dataset_cfg["path_sample"]
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
@@ -57,8 +58,13 @@ metadata = Metadata.from_dict(metadata_dict)
 # %% Load event log
 event_log = pm4py.read_xes(path_xes)
 
+# Select subset of data
+with open(path_sample) as f:
+    sample_objects = f.read().split(",")
+event_log_sample = event_log[event_log[viewpoint].isin(sample_objects)]
+
 # %% Convert event log to OCEL and Networkx graph
-ocel, ocel_nx = convert_event_log_ocel(event_log, viewpoint)
+ocel, ocel_nx = convert_event_log_ocel(event_log_sample)
 
 # %% Load model and define process outcome function
 
@@ -91,14 +97,22 @@ def process_outcome(p: Graph) -> bool:
 
     data = data.to(device)
 
-    # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
-    batch_dict = {
-        node_type: torch.zeros(
-            data[node_type].num_nodes, dtype=torch.long, device=device
-        )
-        for node_type in metadata.node_types
-    }
-    out = model(data.x_dict, data.edge_index_dict, batch_dict)
+    try:
+        # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
+        batch_dict = {
+            node_type: torch.zeros(
+                data[node_type].num_nodes if data[node_type].num_nodes else 0,
+                dtype=torch.long,
+                device=device,
+            )
+            for node_type in metadata.node_types
+        }
+        out = model(data.x_dict, data.edge_index_dict, batch_dict)
+
+    except Exception as e:
+        print(f"Error occurred while processing graph: {e}")
+        print(data)
+        raise e
 
     return bool(out.argmax(dim=-1).cpu().item())
 
@@ -243,7 +257,7 @@ tree_search = TreeSearchCounterFactual(
     process_outcome=process_outcome,
     max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
-    log_file="logs/bpi_2011.log",
+    log_file="logs/road_traffic_fine_management.log",
 )
 
 print(f"counterfactual_label={counterfactual_label}")
