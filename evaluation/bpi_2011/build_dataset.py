@@ -32,6 +32,8 @@ path_xes = dataset_cfg["path_xes"]
 path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
+normalize = dataset_cfg.get("normalize", False)
+one_hot_encoding = dataset_cfg.get("one_hot_encoding", False)
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
@@ -92,8 +94,6 @@ def process_time(process_execution_graph: Graph):
     return max(events) - min(events)
 
 
-normalize = True
-one_hot_encoding = True
 dataset = []
 node_types_set = set()
 edge_types_set = set()

@@ -39,6 +39,8 @@ dataset:
     - "case:Start date14"
     - "case:End date15"
     - "case:Start date15"
+  normalize: True
+  one_hot_encoding: True
 
 process_execution:
   viewpoint: "case:concept:name"

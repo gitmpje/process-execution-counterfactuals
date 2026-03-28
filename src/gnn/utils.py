@@ -30,6 +30,7 @@ class Metadata:
     feat_label_dict: Dict[str, List[str]]
     normalized: bool
     one_hot_encoding: bool
+    add_reverse_edges: bool
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class Metadata:
             "feat_label_dict": self.feat_label_dict,
             "normalized": self.normalized,
             "one_hot_encoding": self.one_hot_encoding,
+            "add_reverse_edges": self.add_reverse_edges,
         }
 
     @classmethod
@@ -52,11 +54,12 @@ class Metadata:
             viewpoint=metadata_dict["viewpoint"],
             node_num_keys=metadata_dict["node_num_keys"],
             node_cat_keys=metadata_dict["node_cat_keys"],
-            node_types=metadata_dict.get("node_types"),
-            edge_types=metadata_dict.get("edge_types"),
-            feat_label_dict=metadata_dict.get("feat_label_dict"),
-            normalized=metadata_dict.get("normalized"),
-            one_hot_encoding=metadata_dict.get("one_hot_encoding"),
+            node_types=metadata_dict.get("node_types", []),
+            edge_types=metadata_dict.get("edge_types", []),
+            feat_label_dict=metadata_dict.get("feat_label_dict", {}),
+            normalized=metadata_dict.get("normalized", False),
+            one_hot_encoding=metadata_dict.get("one_hot_encoding", False),
+            add_reverse_edges=metadata_dict.get("add_reverse_edges", False),
         )
 
 
@@ -351,6 +354,7 @@ def build_process_execution_dataset(
         feat_label_dict=feat_label_dict,
         normalized=normalize,
         one_hot_encoding=one_hot_encoding,
+        add_reverse_edges=add_reverse_edges,
     )
 
     return dataset, metadata
@@ -375,6 +379,7 @@ def generate_explanation(
         viewpoint=metadata.viewpoint,
         normalize=metadata.normalized,
         one_hot_encoding=metadata.one_hot_encoding,
+        add_reverse_edges=metadata.add_reverse_edges,
     )
 
     data = data.to(device)

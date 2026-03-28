@@ -40,6 +40,7 @@ process_execution_cfg = cfg["process_execution"]
 viewpoint = process_execution_cfg["viewpoint"]
 process_execution_object_types = process_execution_cfg["object_types"]
 process_execution_target_activity = process_execution_cfg["target_activity"]
+trace_backward = process_execution_cfg.get("trace_backward", False)
 
 # GNN
 gnn_cfg = cfg["gnn"]
@@ -92,6 +93,7 @@ def process_outcome(p: Graph) -> bool:
         viewpoint=metadata.viewpoint,
         normalize=metadata.normalized,
         one_hot_encoding=metadata.one_hot_encoding,
+        add_reverse_edges=metadata.add_reverse_edges,
     )
 
     data = data.to(device)
@@ -140,7 +142,7 @@ target_process_execution = deepcopy(
         viewpoint_event_id,
         object_types=process_execution_object_types,
         target_activity_type=process_execution_target_activity,
-        backward=True,
+        backward=trace_backward,
     )
 )
 

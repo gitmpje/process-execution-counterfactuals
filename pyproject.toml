@@ -1,9 +1,9 @@
 [project]
 name = "process-execution-counterfactuals"
 version = "0.1.0"
-description = "Research project on generating counterfactuals for process executions on Object-Centric Event Logs "
+description = "Research project on generating counterfactuals for process executions on Object-Centric Event Logs"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = "==3.12.*"
 dependencies = [
   "graphviz ==0.21",
   "ipykernel ==7.*",
@@ -15,6 +15,7 @@ dependencies = [
   "torch ==2.9.*",
   "torch_geometric ==2.7.*",
   "pyyaml >=6.0",
+  "simpn ==1.9.*",
 ]
 
 [build-system]

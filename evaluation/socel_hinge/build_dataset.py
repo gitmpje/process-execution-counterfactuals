@@ -31,6 +31,9 @@ path_ocel = dataset_cfg["path_ocel"]
 path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
+normalize = dataset_cfg.get("normalize", False)
+one_hot_encoding = dataset_cfg.get("one_hot_encoding", False)
+add_reverse_edges = dataset_cfg.get("add_reverse_edges", False)
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
@@ -38,6 +41,7 @@ viewpoint = process_execution_cfg["viewpoint"]
 viewpoint_activity = process_execution_cfg["viewpoint_activity"]
 process_execution_object_types = process_execution_cfg["object_types"]
 process_execution_target_activity = process_execution_cfg["target_activity"]
+trace_backward = process_execution_cfg.get("trace_backward", False)
 
 # %% Load OCEL
 ocel = pm4py.read_ocel2_json(path_ocel)
@@ -105,13 +109,11 @@ def process_outcome(process_execution_graph: Graph, event_id: str) -> bool:
     return int(event_id.split(">")[-1] == "true")
 
 
-normalize = True
-one_hot_encoding = True
 dataset, metadata = build_process_execution_dataset(
     ocel_nx=ocel_nx,
     trace_object_types=process_execution_object_types,
     trace_target_activity_type=process_execution_target_activity,
-    trace_backward=True,
+    trace_backward=trace_backward,
     node_cat_keys=node_cat_keys,
     node_num_keys=node_num_keys,
     viewpoint=viewpoint,
@@ -119,7 +121,7 @@ dataset, metadata = build_process_execution_dataset(
     events_to_trace=viewpoint_events,
     object_type_col=ocel.object_type_column,
     event_activity_col=ocel.event_activity,
-    add_reverse_edges=False,
+    add_reverse_edges=add_reverse_edges,
     normalize=normalize,
     one_hot_encoding=one_hot_encoding,
     path_pe_dataset=path_dataset,
