@@ -61,7 +61,7 @@ class ActionSet:
             f"  node_deletion: "
             f"{json.dumps(make_json_safe(self.node_deletion), indent=INDENTATION)}\n"
             f"  object_substitution: "
-            f"{json.dumps(object_substitution, indent=INDENTATION)}\n"
+            f"{json.dumps(make_json_safe(object_substitution), indent=INDENTATION)}\n"
             f"  node_attributes_modification: "
             f"{json.dumps(make_json_safe(self.node_attributes_modification), indent=INDENTATION)}"
         )

@@ -1,0 +1,41 @@
+dataset:
+  path_ocel: "data/$SCENARIO_PREFIX.json"
+  path_labels: "data/$SCENARIO_PREFIX-labels.json"
+  path_dataset: "data/$SCENARIO_PREFIX-dataset-pe.pt"
+  path_metadata: "data/$SCENARIO_PREFIX-metadata-pe.json"
+  exclude_attributes:
+    - "ocel:eid"
+    - "ocel:timestamp"
+    - "ocel:oid"
+    - "ocel:type"
+    - "is_anomalous"
+    - "reminder_count"
+  normalize: True
+  one_hot_encoding: True
+  add_reverse_edges: True
+
+process_execution:
+  viewpoint: "PO"
+  viewpoint_activity: "place_order"
+  target_activity: "pay_order"
+  object_types:
+    - "PO"
+    - "Item"
+  trace_backward: False
+
+gnn:
+  path_model: "data/$SCENARIO_PREFIX-model-pe.pth"
+  num_layers: 2
+  dropout: 0.1
+  n_epochs: 100
+  start_patience: 25
+  learning_rate: 0.01
+  random_seed: 42
+
+counterfactual:
+  viewpoint_event_label: True
+  depth_first: "node"
+  num_bins: 1
+  max_change_size: 5
+  node_importance_threshold: 0.01
+  attr_importance_threshold: 0.1

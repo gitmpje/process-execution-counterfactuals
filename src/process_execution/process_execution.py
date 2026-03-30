@@ -106,12 +106,6 @@ def extract_process_execution(
         event = events_to_check.pop()
         events_traced.add(event)
 
-        # End trace when target activity type is encountered
-        if target_activity_type and (
-            G.nodes()[event]["attr"].get("ocel:activity") == target_activity_type
-        ):
-            continue
-
         # Add objects related to event to trace
         edges_event_object = [
             (u, v, k)
@@ -122,6 +116,12 @@ def extract_process_execution(
 
         trace_objects = [v for _, v, _ in edges_event_object]
         objects_traced.update(trace_objects)
+
+        # End trace when target activity type is encountered
+        if target_activity_type and (
+            G.nodes()[event]["attr"].get("ocel:activity") == target_activity_type
+        ):
+            continue
 
         selected_objects = [
             o

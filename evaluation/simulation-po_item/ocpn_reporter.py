@@ -2,9 +2,20 @@ import json
 import pandas as pd
 
 from datetime import datetime, timedelta
+from logging import getLogger
 from typing import Any
 from simpn.reporters import OutputReporter
 from ocpn_prototypes import OCPNVar
+
+OCEL_ATTRIBUTE_TYPES = {
+    str: "string",
+    datetime: "time",
+    int: "integer",
+    float: "float",
+    bool: "boolean",
+}
+
+logger = getLogger()
 
 
 def _make_object_id(object_type: str, oid: Any) -> str:
@@ -51,7 +62,7 @@ class OCELReporter(OutputReporter):
         self.header.extend(
             [str(object_type) + "_vmap" for object_type in self.object_types]
         )
-        print(self.header)
+        logger.debug(self.header)
         self.ocel_df = pd.DataFrame(columns=self.header)
 
     def callback(self, input_binding, timestamp, activity, output_binding):
@@ -64,20 +75,26 @@ class OCELReporter(OutputReporter):
             if str(var).endswith(".queue"):
                 # Add all tokens from queues to omap and vmap if they are not put back
                 for (
-                    token
+                    token_value
                 ) in token.value:  # loop over the SimTokens in the input binding queue
                     for sim_element, content in reversed(
                         output_binding
                     ):  # find matching output binding and check if the token is not put back
                         if sim_element == var:
-                            print(token.value)
-                            print(content)
-                            if str(token.value) not in [str(t.value) for t in content]:
-                                omap[token.value["object_type"]].append(
-                                    token.value[str(token.value["object_type"]) + "_id"]
+                            logger.debug(token.value)
+                            logger.debug(content)
+                            if str(token_value.value) not in [
+                                str(t.value) for t in content
+                            ]:
+                                omap[token_value.value["object_type"]].append(
+                                    token_value.value[
+                                        str(token_value.value["object_type"]) + "_id"
+                                    ]
                                 )  # add the object id to the omap
-                                vmap[str(token.value["object_type"]) + "_vmap"].append(
-                                    token.value
+                                vmap[
+                                    str(token_value.value["object_type"]) + "_vmap"
+                                ].append(
+                                    token_value.value
                                 )  # add the object attributes to the vmap
 
             else:
@@ -91,8 +108,7 @@ class OCELReporter(OutputReporter):
             + list(omap.values())
             + list(vmap.values())
         )
-        print(result)
-        print("")
+        logger.debug(result)
         self.ocel_df.loc[len(self.ocel_df)] = result
 
     def _build_ocel_structures(self) -> tuple[dict, dict]:
@@ -200,7 +216,10 @@ class OCELReporter(OutputReporter):
         for o in objects_raw.values():
             ot = o["ocel:type"]
             if ot not in object_types:
-                attrs = [{"name": k, "type": "string"} for k in o["ocel:ovmap"].keys()]
+                attrs = [
+                    {"name": k, "type": OCEL_ATTRIBUTE_TYPES.get(type(v), "string")}
+                    for k, v in o["ocel:ovmap"].items()
+                ]
                 object_types[ot] = {"name": ot, "attributes": attrs}
 
         ocel20_events = []
