@@ -1,4 +1,6 @@
-from typing import Any, Callable, Dict, Iterable, List, Tuple
+from copy import deepcopy
+import random
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from networkx import Graph
 from torch import Tensor
@@ -6,9 +8,12 @@ from torch_geometric.explain import HeteroExplanation
 
 from tree_search.action import (
     EventNodeDeletion,
+    EventNodeInsertion,
+    EventNodeSubstitution,
     NodeAttributeCategorical,
     NodeAttributeNumeric,
     ObjectNodeDeletion,
+    ObjectNodeInsertion,
     ObjectNodeSubstitution,
 )
 
@@ -160,9 +165,12 @@ def build_object_substitution_actions(
     Returns a list of `ObjectNodeSubstitution` instances.
     """
     actions: List[ObjectNodeSubstitution] = []
+    include_attributes: List[str] = []
 
     discretized_attributes = {}
     for attr, spec in attribute_spec_dict.items():
+        include_attributes.append(attr)
+
         if (
             isinstance(spec, (list, tuple))
             and len(spec) == 2
@@ -211,7 +219,225 @@ def build_object_substitution_actions(
                 object_data=node_data,
                 substitution_objects=substitution_objects,
                 event_ids=event_ids,
+                include_attributes=include_attributes,
                 discretized_attributes=discretized_attributes,
+            )
+        )
+
+    return actions
+
+
+def build_event_substitution_actions(
+    target_nodes: Iterable[Tuple[Any, Any]],
+    ocel_nodes: Iterable[Tuple[Any, Any]],
+    graph: Graph = None,
+    check: Callable[[Dict, Dict], bool] = lambda a, b: True,
+    attribute_spec_dict: Dict[str, Any] = None,
+) -> List[EventNodeSubstitution]:
+    """Construct EventNodeSubstitution actions from target graph nodes.
+
+    - target_nodes: iterable of (node_id, node_data) where node_data has 'attr'
+    - ocel_nodes: iterable of (node_id, node_data) from the OCEL graph
+    - check: custom filter (node_attr, subst_attr) -> bool
+    - attribute_spec_dict: optional dictionary for discretization information
+    """
+    actions: List[EventNodeSubstitution] = []
+    include_attributes: List[str] = []
+
+    discretized_attributes = {}
+    for attr, spec in (attribute_spec_dict or {}).items():
+        include_attributes.append(attr)
+
+        if (
+            isinstance(spec, (list, tuple))
+            and len(spec) == 2
+            and all(isinstance(x, (int, float)) for x in spec)
+        ):
+            discretized_attributes[attr] = spec
+
+    ocel_list = list(ocel_nodes)
+    target_map = dict(target_nodes)
+
+    def _event_objects(n_id):
+        if graph is None:
+            return None
+        try:
+            return {
+                obj_id
+                for _, obj_id, eattr in graph.out_edges(n_id, data="attr")
+                if eattr.get("type") == "E2O"
+            }
+        except Exception:
+            return None
+
+    for node_id, node_data in target_map.items():
+        attr = _extract_attr(node_data)
+        if attr.get("type", "") != "EVENT":
+            continue
+
+        base_object_set = _event_objects(node_id)
+        substitution_events: List[Tuple[Any, Any]] = []
+        for subst_id, subst_data in ocel_list:
+            subst_attr = _extract_attr(subst_data)
+            if subst_id == node_id:
+                continue
+            if subst_attr.get("type", "") != "EVENT":
+                continue
+            if not check(attr, subst_attr):
+                continue
+
+            if base_object_set is not None:
+                subst_object_set = _event_objects(subst_id)
+                if subst_object_set is None or subst_object_set != base_object_set:
+                    continue
+
+            substitution_events.append((subst_id, subst_data))
+
+        actions.append(
+            EventNodeSubstitution(
+                event_id=node_id,
+                event_data=node_data,
+                substitution_events=substitution_events,
+                include_attributes=include_attributes,
+                discretized_attributes=discretized_attributes,
+            )
+        )
+
+    return actions
+
+
+def construct_object_base_data(
+    object_types: List[str],
+    metadata: Any,
+    object_type_column: str = "ocel:type",
+    random_state: int = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Construct base data per object type from metadata node keys."""
+    rnd = random.Random(random_state)
+    base_data: Dict[str, Dict[str, Any]] = {}
+
+    # metadata expected to have node_num_keys and node_cat_keys
+    node_num_keys = getattr(metadata, "node_num_keys", {})
+    node_cat_keys = getattr(metadata, "node_cat_keys", {})
+
+    for object_type in object_types:
+        obj_data: Dict[str, Any] = {
+            "type": "OBJECT",
+            object_type_column: object_type,
+        }
+
+        num_keys_for_type = (
+            node_num_keys.get("OBJECT", {}).get(object_type, {})
+            or node_num_keys.get("OBJECT", {}).get("OBJECT", {})
+            or {}
+        )
+        for attr, rng in num_keys_for_type.items():
+            if not isinstance(rng, (list, tuple)) or len(rng) != 2:
+                continue
+            vmin, vmax = float(rng[0]), float(rng[1])
+            if vmin == vmax:
+                obj_data[attr] = vmin
+            else:
+                obj_data[attr] = rnd.uniform(vmin, vmax)
+
+        cat_keys_for_type = (
+            node_cat_keys.get("OBJECT", {}).get(object_type, {})
+            or node_cat_keys.get("OBJECT", {}).get("OBJECT", {})
+            or {}
+        )
+        for attr, values in cat_keys_for_type.items():
+            if not values:
+                continue
+            obj_data[attr] = rnd.choice(values)
+
+        base_data[object_type] = obj_data
+
+    return base_data
+
+
+def build_event_insertion_actions(
+    target_event_nodes: Iterable[Tuple[Any, Any]],
+    event_activities: List[str],
+    event_activity_column: str = "ocel:activity",
+    base_event_data: Dict[str, Any] = None,
+    object_ids: List[str] = None,
+) -> List["EventNodeInsertion"]:
+    """Construct EventNodeInsertion actions for target event nodes.
+
+    - event_activities: list of activity labels to generate one event option each.
+    - event_activity_column: name of the activity column to set in each event option.
+    - base_event_data: optional base event attributes to merge into each generated option.
+    """
+    actions: List[EventNodeInsertion] = []
+    object_ids = object_ids or []
+    base_event_data = deepcopy(base_event_data or {})
+
+    event_data_options = []
+    for activity in event_activities:
+        event_attr = deepcopy(base_event_data)
+        event_attr["type"] = event_attr.get("type", "EVENT")
+        event_attr[event_activity_column] = activity
+        # Use nested attr wrapper for consistency with node_data format
+        event_data_options.append({"attr": event_attr})
+
+    for node_id, node_data in target_event_nodes:
+        attr = _extract_attr(node_data)
+        if attr.get("type", "") != "EVENT":
+            continue
+        actions.append(
+            EventNodeInsertion(
+                event_id=node_id,
+                event_data_options=deepcopy(event_data_options),
+                object_ids=object_ids,
+            )
+        )
+
+    return actions
+
+
+def build_object_insertion_actions(
+    target_event_nodes: Iterable[Tuple[Any, Any]],
+    object_types: List[str],
+    object_type_column: str = "ocel:type",
+    base_object_data: Optional[Dict[str, Dict[str, Any]]] = None,
+    metadata: Any = None,
+    random_state: int = None,
+) -> List["ObjectNodeInsertion"]:
+    """Construct ObjectNodeInsertion actions for target event nodes.
+
+    - object_types: list of object type values, each becomes one insertion option.
+    - object_type_column: name of type column in object attributes.
+    - base_object_data: for each object type optional base object attributes to merge into each option.
+    - metadata: optional object with node_num_keys/node_cat_keys to generate default values.
+    - random_state: seed for randomized numeric/categorical value selection.
+    """
+    actions: List[ObjectNodeInsertion] = []
+
+    if base_object_data is None and metadata is not None:
+        base_object_data = construct_object_base_data(
+            object_types=object_types,
+            metadata=metadata,
+            object_type_column=object_type_column,
+            random_state=random_state,
+        )
+
+    base_object_data = deepcopy(base_object_data or {})
+
+    object_data_options = []
+    for object_type in object_types:
+        object_attr = deepcopy(base_object_data.get(object_type, {}))
+        object_attr["type"] = object_attr.get("type", "OBJECT")
+        object_attr[object_type_column] = object_type
+        object_data_options.append({"attr": object_attr})
+
+    for node_id, node_data in target_event_nodes:
+        attr = _extract_attr(node_data)
+        if attr.get("type", "") != "EVENT":
+            continue
+        actions.append(
+            ObjectNodeInsertion(
+                event_id=node_id,
+                object_data_options=deepcopy(object_data_options),
             )
         )
 
@@ -454,6 +680,9 @@ __all__ = [
     "get_nodes_by_importance",
     "get_feature_labels_by_importance",
     "build_object_substitution_actions",
+    "build_event_substitution_actions",
+    "build_event_insertion_actions",
+    "build_object_insertion_actions",
     "build_node_deletion_actions",
     "build_node_attribute_actions",
     "construct_attribute_spec_dict",

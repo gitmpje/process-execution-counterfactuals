@@ -63,12 +63,14 @@ def attribute_diff(v1, v2, interval_size: int | float = None):
 def node_attribute_diffs(
     n1,
     n2,
-    exclude_attributes: List[str] = None,
+    include_attributes: List[str] = None,
     discretized_attributes: Dict[str, Any] = None,
 ):
     """
     Compute node attribute differences.
     """
+    include_attributes = include_attributes or []
+
     attr1 = n1.get("attr", {})
     attr2 = n2.get("attr", {})
 
@@ -77,7 +79,7 @@ def node_attribute_diffs(
     if not common_keys:
         return 0.0
 
-    attribute_labels = [k for k in common_keys if k not in exclude_attributes]
+    attribute_labels = [k for k in common_keys if k in include_attributes]
 
     diffs = []
     for k in attribute_labels:
@@ -97,7 +99,7 @@ def node_subst_cost(
     n2,
     w_type: float = 2.0,
     w_attr: float = 1.0,
-    exclude_attributes: List[str] = None,
+    include_attributes: List[str] = None,
     aggregation_type: str = "average",
     discretized_attributes: Dict[str, Any] = None,
 ):
@@ -109,7 +111,7 @@ def node_subst_cost(
         attr_diffs = node_attribute_diffs(
             n1,
             n2,
-            exclude_attributes=exclude_attributes,
+            include_attributes=include_attributes,
             discretized_attributes=discretized_attributes,
         )
         if aggregation_type == "average":

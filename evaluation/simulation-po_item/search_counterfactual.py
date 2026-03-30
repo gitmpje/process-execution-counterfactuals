@@ -10,9 +10,12 @@ from networkx import Graph
 from random import seed
 
 from tree_search.action_helpers import (
-    build_object_substitution_actions,
-    build_node_deletion_actions,
     build_node_attribute_actions,
+    build_object_substitution_actions,
+    build_event_substitution_actions,
+    build_event_insertion_actions,
+    build_object_insertion_actions,
+    build_node_deletion_actions,
     construct_attribute_spec_dict,
     get_nodes_by_importance,
     get_feature_labels_by_importance,
@@ -24,7 +27,7 @@ from gnn.hetero_graph_data import build_hetero_data
 from gnn.utils import Metadata, generate_explanation
 from process_execution.process_execution import extract_process_execution
 
-from utils import _replace_scenario_prefix
+from utils import _replace_scenario_prefix, visualize_process_execution
 
 ### Configuration ###
 config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -186,6 +189,9 @@ target_process_execution = deepcopy(
         backward=trace_backward,
     )
 )
+visualize_process_execution(
+    target_process_execution, f"data/{SCENARIO_PREFIX}-target_pe.svg"
+)
 
 counterfactual_label = not process_outcome(target_process_execution)
 
@@ -227,21 +233,17 @@ object_node_attributes = build_node_attribute_actions(
     object_type_column=ocel.object_type_column,
 )
 
-# Object substitution actions
-target_nodes_for_subst = (
+# Event substitution actions
+target_event_nodes = [
     (n, target_process_execution.nodes(data=True)[n])
     for n in nodes_ordered
-    if target_process_execution.nodes(data=True)[n]
-    .get("attr", {})
-    .get(ocel.object_type_column, "")
-    in ["item"]
-)
-
-object_substitution_actions = build_object_substitution_actions(
-    target_nodes=target_nodes_for_subst,
-    ocel_nodes=ocel_nx.nodes(data=True),
+    if target_process_execution.nodes(data=True)[n].get("attr", {}).get("type", "")
+    == "EVENT"
+]
+event_substitution_actions = build_event_substitution_actions(
+    target_nodes=target_event_nodes,
+    ocel_nodes=target_process_execution.nodes(data=True),
     graph=target_process_execution,
-    object_type_column=ocel.object_type_column,
     attribute_spec_dict=attribute_spec_dict,
 )
 
@@ -254,7 +256,37 @@ event_node_attributes = build_node_attribute_actions(
     node_type="EVENT",
 )
 
-# Events that can be deleted
+# Events to insert
+event_insertion_actions = build_event_insertion_actions(
+    target_event_nodes=target_event_nodes,
+    event_activities=list(ocel.events[ocel.event_activity].unique()),
+)
+
+# Object substitution actions
+target_object_nodes = (
+    (n, target_process_execution.nodes(data=True)[n])
+    for n in nodes_ordered
+    if target_process_execution.nodes(data=True)[n]
+    .get("attr", {})
+    .get(ocel.object_type_column, "")
+    in ["item"]
+)
+object_substitution_actions = build_object_substitution_actions(
+    target_nodes=target_object_nodes,
+    ocel_nodes=ocel_nx.nodes(data=True),
+    graph=target_process_execution,
+    object_type_column=ocel.object_type_column,
+    attribute_spec_dict=attribute_spec_dict,
+)
+
+# Objects to insert
+object_insertion_actions = build_object_insertion_actions(
+    target_event_nodes=target_event_nodes,
+    object_types=list(ocel.objects[ocel.object_type_column].unique()),
+    metadata=metadata,
+)
+
+# Nodes (events and objects) that can be deleted
 node_deletion_actions = build_node_deletion_actions(
     target_process_execution.nodes(data=True),
     nodes_order=nodes_ordered,
@@ -273,12 +305,27 @@ if depth_first == "node":
         if action.action_space_size() > 0:
             actions_grouped[action.object_id].append(action)
 
+    for action in event_substitution_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
+    for action in event_insertion_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
+    for action in object_substitution_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.object_id].append(action)
+
+    for action in object_insertion_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
     for action in node_deletion_actions:
         if action.action_space_size() > 0:
             for option in action.deletion_options:
                 for node in option:
                     actions_grouped[node].append(action)
-
 
 elif depth_first == "attribute":
     actions_grouped = {attr: [] for attrs in attr_ordered.values() for attr in attrs}
@@ -286,15 +333,24 @@ elif depth_first == "attribute":
         if action.action_space_size() > 0:
             actions_grouped[action.attribute_name].append(action)
 
-    actions_grouped["object_substitution"] = object_substitution_actions
-    actions_grouped["node_deletion"] = node_deletion_actions
+    # Include all node actions (substitute/insert/delete) in one group
+    actions_grouped["node"] = (
+        object_substitution_actions
+        + event_substitution_actions
+        + object_insertion_actions
+        + event_insertion_actions
+        + node_deletion_actions
+    )
 
 else:
     available_actions = (
         object_node_attributes
         + event_node_attributes
-        + node_deletion_actions
         + object_substitution_actions
+        + event_substitution_actions
+        + object_insertion_actions
+        + event_insertion_actions
+        + node_deletion_actions
     )
 
 
@@ -339,33 +395,6 @@ with open("data/cf_results.txt", "a") as f:
         f.write("No counterfactual found\n")
     f.write("\n")
 
-
-# %% Visualization
-def visualize_process_execution(
-    process_execution: Graph,
-    output_file_name: str = f"data/{SCENARIO_PREFIX}-process_execution.svg",
-):
-    from networkx import nx_agraph
-    from process_execution.process_execution import ProcessExecution
-    from process_execution.visualization import (
-        apply_node_styles_nx,
-        apply_edge_styles_nx,
-    )
-
-    process_execution = ProcessExecution(process_execution)
-    process_execution.construct_node_label()
-    process_execution.construct_edge_label()
-
-    apply_node_styles_nx(process_execution)
-    apply_edge_styles_nx(process_execution)
-
-    agraph = nx_agraph.to_agraph(process_execution)
-    agraph.draw(output_file_name, prog="dot")
-
-
-visualize_process_execution(
-    target_process_execution, f"data/{SCENARIO_PREFIX}-target_pe.svg"
-)
 if sorted_action_sets:
     _, changes = sorted_action_sets[-1].apply_changes(target_process_execution)
     visualize_process_execution(

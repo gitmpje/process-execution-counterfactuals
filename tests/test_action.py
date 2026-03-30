@@ -6,6 +6,7 @@ from tree_search.action import (
     NodeAttributeNumeric,
     NodeAttributeCategorical,
     ObjectNodeSubstitution,
+    EventNodeSubstitution,
     EventNodeDeletion,
     ObjectNodeDeletion,
     NodeDeletion,
@@ -93,6 +94,70 @@ def test_node_deletion_action_space():
     assert ["c"] in opts or ["a", "b"] in opts
 
 
+def test_event_node_substitution_apply_and_undo():
+    p = ProcessExecution()
+    # Set up two events and neighbors with DF edges
+    p.add_node("e1", attr={"type": "EVENT", "ocel:timestamp": "t1", "epoch": 1})
+    p.add_node("e2", attr={"type": "EVENT", "ocel:timestamp": "t2", "epoch": 2})
+    p.add_node("e0", attr={"type": "EVENT"})
+    p.add_node("e3", attr={"type": "EVENT"})
+    p.add_node("e4", attr={"type": "EVENT"})
+    p.add_node("e5", attr={"type": "EVENT"})
+
+    p.add_edge("e0", "e1", attr={"type": "DF"})
+    p.add_edge("e1", "e3", attr={"type": "DF"})
+    p.add_edge("e4", "e2", attr={"type": "DF"})
+    p.add_edge("e2", "e5", attr={"type": "DF"})
+
+    action = EventNodeSubstitution(
+        event_id="e1",
+        event_data={},
+        substitution_events=[("e2", {})],
+    )
+
+    record = action.apply_change(p, ("e2", {}))
+
+    # DF edges should be swapped
+    expected_after = {
+        ("e0", "e2"),
+        ("e2", "e3"),
+        ("e4", "e1"),
+        ("e1", "e5"),
+    }
+    actual_after = {
+        (u, v)
+        for u, v, d in p.edges(data=True)
+        if d.get("attr", {}).get("type") == "DF"
+    }
+    assert actual_after == expected_after
+
+    # timestamps and epoch should be swapped
+    assert p.nodes["e1"]["attr"]["ocel:timestamp"] == "t2"
+    assert p.nodes["e2"]["attr"]["ocel:timestamp"] == "t1"
+    assert p.nodes["e1"]["attr"]["epoch"] == 2
+    assert p.nodes["e2"]["attr"]["epoch"] == 1
+
+    # undo should restore original
+    action.undo_change(p, record)
+
+    expected_before = {
+        ("e0", "e1"),
+        ("e1", "e3"),
+        ("e4", "e2"),
+        ("e2", "e5"),
+    }
+    actual_before = {
+        (u, v)
+        for u, v, d in p.edges(data=True)
+        if d.get("attr", {}).get("type") == "DF"
+    }
+    assert actual_before == expected_before
+    assert p.nodes["e1"]["attr"]["ocel:timestamp"] == "t1"
+    assert p.nodes["e2"]["attr"]["ocel:timestamp"] == "t2"
+    assert p.nodes["e1"]["attr"]["epoch"] == 1
+    assert p.nodes["e2"]["attr"]["epoch"] == 2
+
+
 def test_event_node_deletion_apply():
     p = ProcessExecution()
     p.add_node("e1", attr={"type": "EVENT"})
@@ -103,7 +168,7 @@ def test_event_node_deletion_apply():
     p.add_edge("e0", "e1", attr={"type": "DF"})
 
     action = EventNodeDeletion(deletion_options=[["e1"]])
-    r = action.apply_change(p, ["e1"])
+    action.apply_change(p, ["e1"])
 
     # node should not exist anymore
     assert not p.has_node("e1")

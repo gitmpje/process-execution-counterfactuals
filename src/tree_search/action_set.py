@@ -1,13 +1,17 @@
 import json
 
+from textwrap import indent
 from typing import Any, Dict, List, Tuple
 
 from process_execution.process_execution import ProcessExecution
 from tree_search.action import (
-    EventNodeDeletion,
     Action,
-    NodeAttributeNumeric,
+    EventNodeDeletion,
+    EventNodeSubstitution,
+    EventNodeInsertion,
+    ObjectNodeInsertion,
     NodeAttributeCategorical,
+    NodeAttributeNumeric,
     ObjectNodeDeletion,
     ObjectNodeSubstitution,
 )
@@ -38,59 +42,81 @@ class ActionSet:
 
     def __init__(
         self,
-        node_deletion: Dict[EventNodeDeletion, List[str]] = None,
+        node_attributes_modification: Dict[NodeAttributeNumeric, Any] = None,
+        event_insertion: Dict[EventNodeInsertion, bool] = None,
+        event_substitution: Dict[EventNodeSubstitution, Tuple[str, dict] | None] = None,
+        object_insertion: Dict[ObjectNodeInsertion, bool] = None,
         object_substitution: Dict[
             ObjectNodeSubstitution, Tuple[str, dict] | None
         ] = None,
-        node_attributes_modification: Dict[NodeAttributeNumeric, Any] = None,
+        node_deletion: Dict[EventNodeDeletion, List[str]] = None,
     ):
-        self.node_deletion = node_deletion if node_deletion else {}
-        self.object_substitution = object_substitution if object_substitution else {}
-        self.node_attributes_modification = (
-            node_attributes_modification if node_attributes_modification else {}
-        )
+        self.node_attributes_modification = node_attributes_modification or {}
+        self.event_substitution = event_substitution or {}
+        self.object_substitution = object_substitution or {}
+        self.event_insertion = event_insertion or {}
+        self.object_insertion = object_insertion or {}
+        self.node_deletion = node_deletion or {}
 
     def __repr__(self):
-        # Pre-process substitution dict: original code extracts first element of tuple/list
+        # Pre-process substitution dictionaries
+        event_substitution = {
+            k: make_json_safe(v[0]) for k, v in self.event_substitution.items()
+        }
         object_substitution = {
             k: make_json_safe(v[0]) for k, v in self.object_substitution.items()
         }
 
-        return (
-            f"ActionSet<{id(self)}>\n"
-            f"  node_deletion: "
-            f"{json.dumps(make_json_safe(self.node_deletion), indent=INDENTATION)}\n"
-            f"  object_substitution: "
-            f"{json.dumps(make_json_safe(object_substitution), indent=INDENTATION)}\n"
-            f"  node_attributes_modification: "
-            f"{json.dumps(make_json_safe(self.node_attributes_modification), indent=INDENTATION)}"
-        )
+        event_insertion = {
+            k: make_json_safe(v) for k, v in self.event_insertion.items()
+        }
+        object_insertion = {
+            k: make_json_safe(v) for k, v in self.object_insertion.items()
+        }
+
+        full_dict = {
+            "node_attributes_modification": make_json_safe(
+                self.node_attributes_modification
+            ),
+            "event_substitution": make_json_safe(event_substitution),
+            "object_substitution": make_json_safe(object_substitution),
+            "event_insertion": make_json_safe(event_insertion),
+            "object_insertion": make_json_safe(object_insertion),
+            "node_deletion": make_json_safe(self.node_deletion),
+        }
+
+        formatted = json.dumps(full_dict, indent=INDENTATION)
+        return f"ActionSet<{id(self)}>\n" + indent(formatted, " " * INDENTATION)
 
     def __copy__(self):
         """
         Make a shallow copy of this object.
         """
         new_obj = type(self)(
-            node_deletion={k: v for k, v in self.node_deletion.items()},
-            object_substitution={k: v for k, v in self.object_substitution.items()},
             node_attributes_modification={
                 k: v for k, v in self.node_attributes_modification.items()
             },
+            event_substitution={k: v for k, v in self.event_substitution.items()},
+            object_substitution={k: v for k, v in self.object_substitution.items()},
+            node_deletion={k: v for k, v in self.node_deletion.items()},
+            event_insertion={k: v for k, v in self.event_insertion.items()},
+            object_insertion={k: v for k, v in self.object_insertion.items()},
         )
         return new_obj
 
     def __eq__(self, other):
         """
         Equality check for ActionSet objects.
-        Two ActionSets are equal if they are the same type and their node_deletion,
-        object_substitution, and node_attributes_modification dictionaries are equal.
         """
         if not isinstance(other, ActionSet):
             return NotImplemented
         return (
-            self.node_deletion == other.node_deletion
+            self.node_attributes_modification == other.node_attributes_modification
+            and self.event_substitution == other.event_substitution
             and self.object_substitution == other.object_substitution
-            and self.node_attributes_modification == other.node_attributes_modification
+            and self.event_insertion == other.event_insertion
+            and self.object_insertion == other.object_insertion
+            and self.node_deletion == other.node_deletion
         )
 
     def undo_changes(self, p: ProcessExecution, record: dict) -> ProcessExecution:
@@ -99,16 +125,28 @@ class ActionSet:
         provided record. The process execution `p` is modified in place and
         returned for convenience.
         """
-        # restore node attribute modifications
+        # Node attribute modifications
         for action, undo_info in record.get("node_attributes", {}).items():
             action.undo_change(p, undo_info)
 
-        # restore deletions (nodes and edges)
-        for action, undo_info in record.get("node_deletion", {}).items():
+        # Event substitutions
+        for action, undo_info in record.get("event_substitution", {}).items():
             action.undo_change(p, undo_info)
 
-        # restore object substitutions
+        # Object substitutions
         for action, undo_info in record.get("object_substitution", {}).items():
+            action.undo_change(p, undo_info)
+
+        # Event insertions
+        for action, undo_info in record.get("event_insertion", {}).items():
+            action.undo_change(p, undo_info)
+
+        # Object insertions
+        for action, undo_info in record.get("object_insertion", {}).items():
+            action.undo_change(p, undo_info)
+
+        # Deletions (nodes and edges)
+        for action, undo_info in record.get("node_deletion", {}).items():
             action.undo_change(p, undo_info)
 
         return p
@@ -116,16 +154,109 @@ class ActionSet:
     def __ne__(self, other):
         """
         Inequality check for ActionSet objects.
-        Two ActionSets are not equal if their node_deletion,
-        object_substitution, or node_attributes_modification dictionaries are different.
         """
         if not isinstance(other, ActionSet):
             return NotImplemented
         return (
-            self.node_deletion != other.node_deletion
+            self.node_attributes_modification != other.node_attributes_modification
+            or self.event_substitution != other.event_substitution
             or self.object_substitution != other.object_substitution
-            or self.node_attributes_modification != other.node_attributes_modification
+            or self.event_insertion != other.event_insertion
+            or self.object_insertion != other.object_insertion
+            or self.node_deletion != other.node_deletion
         )
+
+    def _affected_nodes(self, exclude_action: Action = None) -> set:
+        """Return the set of node ids already affected by this action set."""
+        nodes = set()
+
+        # Node attribute changes
+        nodes |= {
+            action.node_id
+            for action in self.node_attributes_modification.keys()
+            if action is not exclude_action
+        }
+
+        # Event substitutions
+        for action, subst in self.event_substitution.items():
+            if action is exclude_action:
+                continue
+            nodes.add(action.event_id)
+            if subst:
+                nodes.add(subst[0])
+
+        # Object substitutions
+        for action, subst in self.object_substitution.items():
+            if action is exclude_action:
+                continue
+            nodes.add(action.object_id)
+            if subst:
+                nodes.add(subst[0])
+
+        # Event insertion
+        for action, insertion in self.event_insertion.items():
+            if action is exclude_action:
+                continue
+            nodes.add(action.event_id)
+            if insertion:
+                nodes.update(insertion)
+
+        # Object insertion
+        for action, insertion in self.object_insertion.items():
+            if action is exclude_action:
+                continue
+            nodes.add(action.event_id)
+            if insertion:
+                nodes.update(insertion)
+
+        # Node deletions
+        for action, deletions in self.node_deletion.items():
+            if action is exclude_action:
+                continue
+            if deletions:
+                nodes.update(deletions)
+
+        return nodes
+
+    def is_node_available(self, node_id: Any, exclude_action: Action = None) -> bool:
+        """Return True if node is not already involved in a conflicting action."""
+        return node_id not in self._affected_nodes(exclude_action=exclude_action)
+
+    def is_change_allowed(self, action: Action, change_value: Any) -> bool:
+        """Return False if the node(s) in this change are already modified."""
+        affected = self._affected_nodes(exclude_action=action)
+
+        # Build node set for this specific action change
+        candidate_nodes = set()
+
+        if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
+            candidate_nodes.add(action.node_id)
+
+        elif isinstance(action, EventNodeSubstitution):
+            candidate_nodes.add(action.event_id)
+            if change_value:
+                candidate_nodes.add(change_value[0])
+
+        elif isinstance(action, ObjectNodeSubstitution):
+            candidate_nodes.add(action.object_id)
+            if change_value:
+                candidate_nodes.add(change_value[0])
+
+        elif isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
+            if change_value:
+                candidate_nodes.update(change_value)
+
+        elif isinstance(action, (EventNodeInsertion, ObjectNodeInsertion)):
+            # Insertion is anchored on a source event; this event must not be used by
+            # any other conflicting operation in the same action set.
+            candidate_nodes.add(action.event_id)
+
+        else:
+            # Unknown action type, can't determine safety; be conservative
+            return False
+
+        # Determine whether any node is already affected by other actions
+        return candidate_nodes.isdisjoint(affected)
 
     def get_change_value(self, action: Action) -> Any | None:
         """
@@ -135,12 +266,18 @@ class ActionSet:
         Returns:
             Any: The current change value for the action.
         """
-        if isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
-            return self.node_deletion.get(action)
-        elif isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
+        if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
             return self.node_attributes_modification.get(action)
+        elif isinstance(action, EventNodeSubstitution):
+            return self.event_substitution.get(action)
         elif isinstance(action, ObjectNodeSubstitution):
             return self.object_substitution.get(action)
+        elif isinstance(action, EventNodeInsertion):
+            return self.event_insertion.get(action)
+        elif isinstance(action, ObjectNodeInsertion):
+            return self.object_insertion.get(action)
+        elif isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
+            return self.node_deletion.get(action)
         else:
             raise NotImplementedError(f"Action of type {type(action)} is not supported")
 
@@ -151,12 +288,18 @@ class ActionSet:
             action (Action): The action for which to set the change value.
             value (Any): The new value to set for the action.
         """
-        if isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
-            self.node_deletion[action] = value
-        elif isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
+        if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
             self.node_attributes_modification[action] = value
+        elif isinstance(action, EventNodeSubstitution):
+            self.event_substitution[action] = value
         elif isinstance(action, ObjectNodeSubstitution):
             self.object_substitution[action] = value
+        elif isinstance(action, EventNodeInsertion):
+            self.event_insertion[action] = value
+        elif isinstance(action, ObjectNodeInsertion):
+            self.object_insertion[action] = value
+        elif isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
+            self.node_deletion[action] = value
         else:
             raise NotImplementedError(f"Action of type {type(action)} is not supported")
 
@@ -166,21 +309,38 @@ class ActionSet:
         Returns:
             int: The total number of changes.
         """
-        deletion_size = sum(
-            action.change_size(del_nodes=del_nodes)
-            for action, del_nodes in self.node_deletion.items()
-        )
-
-        substitution_size = sum(
-            action.change_size(subst_node=subst_obj)
-            for action, subst_obj in self.object_substitution.items()
-        )
-
         node_attributes_modification_size = sum(
             action.change_size(change_value=change_value)
             for action, change_value in self.node_attributes_modification.items()
         )
-        return deletion_size + substitution_size + node_attributes_modification_size
+        event_substitution_size = sum(
+            action.change_size(subst_node=subst_event)
+            for action, subst_event in self.event_substitution.items()
+        )
+        object_substitution_size = sum(
+            action.change_size(subst_node=subst_obj)
+            for action, subst_obj in self.object_substitution.items()
+        )
+        event_insertion_size = sum(
+            action.change_size(change_value)
+            for action, change_value in self.event_insertion.items()
+        )
+        object_insertion_size = sum(
+            action.change_size(change_value)
+            for action, change_value in self.object_insertion.items()
+        )
+        deletion_size = sum(
+            action.change_size(del_nodes=del_nodes)
+            for action, del_nodes in self.node_deletion.items()
+        )
+        return (
+            node_attributes_modification_size
+            + event_substitution_size
+            + object_substitution_size
+            + event_insertion_size
+            + object_insertion_size
+            + deletion_size
+        )
 
     def objective_value(self) -> int:
         """
@@ -190,15 +350,20 @@ class ActionSet:
         """
         substitutions = [
             (k.object_id, v[0]) for k, v in self.object_substitution.items() if v
-        ]
+        ] + [(k.event_id, v[0]) for k, v in self.event_substitution.items() if v]
+
+        insertion = len([k for k, v in self.event_insertion.items() if v]) + len(
+            [k for k, v in self.object_insertion.items() if v]
+        )
 
         return (
             len(self.node_deletion)
+            + insertion
             + len(
                 [
-                    obj_id
-                    for obj_id, subst_obj_id in substitutions
-                    if obj_id != subst_obj_id
+                    node_id
+                    for node_id, subst_node_id in substitutions
+                    if node_id != subst_node_id
                 ]
             )
             + len([k for k, v in self.node_attributes_modification.items() if v != 0])
@@ -221,20 +386,38 @@ class ActionSet:
         # record structure holds per-action undo data
         record: dict = {
             "node_attributes": {},
-            "node_deletion": {},
+            "event_substitution": {},
             "object_substitution": {},
+            "event_insertion": {},
+            "object_insertion": {},
+            "node_deletion": {},
         }
 
         for action, value in self.node_attributes_modification.items():
             record["node_attributes"][action] = action.apply_change(p, value)
 
-        for action, deletion in self.node_deletion.items():
-            if deletion:
-                record["node_deletion"][action] = action.apply_change(p, deletion)
+        for action, substitution in self.event_substitution.items():
+            if substitution:
+                record["event_substitution"][action] = action.apply_change(
+                    p, substitution
+                )
 
         for action, substitution in self.object_substitution.items():
             if substitution:
                 record["object_substitution"][action] = action.apply_change(
                     p, substitution
                 )
+
+        for action, deletion in self.node_deletion.items():
+            if deletion:
+                record["node_deletion"][action] = action.apply_change(p, deletion)
+
+        for action, insertion in self.event_insertion.items():
+            if insertion:
+                record["event_insertion"][action] = action.apply_change(p, insertion)
+
+        for action, insertion in self.object_insertion.items():
+            if insertion:
+                record["object_insertion"][action] = action.apply_change(p, insertion)
+
         return p, record

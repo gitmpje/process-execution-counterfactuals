@@ -6,6 +6,9 @@ from typing import Dict
 
 from tree_search.action_helpers import (
     _extract_attr,
+    build_event_insertion_actions,
+    build_event_substitution_actions,
+    build_object_insertion_actions,
     build_object_substitution_actions,
     build_node_deletion_actions,
     _parse_value_spec,
@@ -16,6 +19,7 @@ from tree_search.action_helpers import (
 )
 from tree_search.action import (
     EventNodeDeletion,
+    EventNodeSubstitution,
     ObjectNodeDeletion,
     NodeAttributeNumeric,
     NodeAttributeCategorical,
@@ -91,8 +95,9 @@ def test_get_feature_labels_per_category_and_topk():
     mask = tensor([[1.0, 2.0], [3.0, 4.0]])
     expl = DummyExplanation({"t": {"node_mask": mask}})
     feat_labels = {"t": ["foo[bar]", "foo[baz]"]}
+    node_cat_keys = {"OBJECT": {"t": {"foo": ["bar", "baz"]}}}
     out = get_feature_labels_by_importance(
-        expl, feat_labels, one_hot_encoding=True, top_k=1
+        expl, feat_labels, node_cat_keys, one_hot_encoding=True, top_k=1
     )
     assert out["t"][0]["feature"] == "foo"
     assert len(out["t"]) == 1
@@ -193,6 +198,141 @@ def test_build_object_substitution_simple_graph():
     # substitution_objects should include o2 only
     assert any(sub[0] == "o2" for sub in feat.substitution_objects)
     assert feat.event_ids == ["e1"]
+
+
+def test_build_event_substitution_simple_graph():
+    p = ProcessExecution()
+    p.add_node("e1", attr={"type": "EVENT", "ocel:activity": "X"})
+    p.add_node("e2", attr={"type": "EVENT", "ocel:activity": "X"})
+    p.add_node("e3", attr={"type": "EVENT", "ocel:activity": "Y"})
+
+    target_nodes = [("e1", {"attr": {"type": "EVENT", "ocel:activity": "X"}})]
+    ocel_nodes = [
+        ("e1", {"attr": {"type": "EVENT", "ocel:activity": "X"}}),
+        ("e2", {"attr": {"type": "EVENT", "ocel:activity": "X"}}),
+        ("e3", {"attr": {"type": "EVENT", "ocel:activity": "Y"}}),
+    ]
+
+    actions = build_event_substitution_actions(
+        target_nodes,
+        ocel_nodes,
+        p,
+        check=lambda a, b: True,
+        attribute_spec_dict={},
+    )
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, EventNodeSubstitution)
+    assert action.event_id == "e1"
+    assert any(sub_id == "e2" for sub_id, _ in action.substitution_events)
+
+
+def test_build_event_substitution_with_object_relations():
+    p = ProcessExecution()
+    p.add_node("e1", attr={"type": "EVENT", "ocel:activity": "X"})
+    p.add_node("e2", attr={"type": "EVENT", "ocel:activity": "X"})
+    p.add_node("e3", attr={"type": "EVENT", "ocel:activity": "X"})
+    p.add_node("o1", attr={"type": "OBJECT", "ocel:type": "A"})
+    p.add_node("o2", attr={"type": "OBJECT", "ocel:type": "A"})
+
+    p.add_edge("e1", "o1", attr={"type": "E2O"})
+    p.add_edge("e2", "o1", attr={"type": "E2O"})
+    p.add_edge("e3", "o2", attr={"type": "E2O"})
+
+    target_nodes = [("e1", {"attr": {"type": "EVENT", "ocel:activity": "X"}})]
+    ocel_nodes = [
+        ("e1", {"attr": {"type": "EVENT", "ocel:activity": "X"}}),
+        ("e2", {"attr": {"type": "EVENT", "ocel:activity": "X"}}),
+        ("e3", {"attr": {"type": "EVENT", "ocel:activity": "X"}}),
+    ]
+
+    actions = build_event_substitution_actions(
+        target_nodes,
+        ocel_nodes,
+        p,
+        check=lambda a, b: True,
+        attribute_spec_dict={},
+    )
+
+    assert len(actions) == 1
+    action = actions[0]
+    assert isinstance(action, EventNodeSubstitution)
+    assert action.event_id == "e1"
+    assert any(sub_id == "e2" for sub_id, _ in action.substitution_events)
+    assert all(sub_id != "e3" for sub_id, _ in action.substitution_events)
+
+
+def test_build_event_insertion_actions():
+    actions = build_event_insertion_actions(
+        [("e1", {"attr": {"type": "EVENT"}})],
+        event_activities=["A", "B"],
+        event_activity_column="ocel:activity",
+        base_event_data={"type": "EVENT"},
+        object_ids=["o1"],
+    )
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.event_id == "e1"
+    assert action.object_ids == ["o1"]
+    assert len(action.event_data_options) == 2
+    assert action.event_data_options[0]["attr"]["ocel:activity"] == "A"
+    assert action.event_data_options[1]["attr"]["ocel:activity"] == "B"
+
+
+def test_build_object_insertion_actions():
+    actions = build_object_insertion_actions(
+        [("e1", {"attr": {"type": "EVENT"}})],
+        object_types=["A", "B"],
+        object_type_column="ocel:type",
+        base_object_data={
+            "A": {"type": "OBJECT", "ocel:color": "red"},
+            "B": {"type": "OBJECT", "ocel:color": "blue"},
+        },
+    )
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.event_id == "e1"
+    assert len(action.object_data_options) == 2
+    assert action.object_data_options[0]["attr"]["ocel:type"] == "A"
+    assert action.object_data_options[0]["attr"]["ocel:color"] == "red"
+    assert action.object_data_options[1]["attr"]["ocel:type"] == "B"
+    assert action.object_data_options[1]["attr"]["ocel:color"] == "blue"
+
+
+def test_build_object_insertion_actions_with_metadata():
+    class MetadataObj:
+        pass
+
+    metadata = MetadataObj()
+    metadata.node_num_keys = {
+        "OBJECT": {
+            "OBJECT": {"weight": (1.0, 3.0)},
+            "A": {"size": (10.0, 20.0)},
+        }
+    }
+    metadata.node_cat_keys = {
+        "OBJECT": {
+            "OBJECT": {"shape": ["circle", "square"]},
+            "A": {"material": ["metal", "plastic"]},
+        }
+    }
+
+    actions = build_object_insertion_actions(
+        [("e1", {"attr": {"type": "EVENT"}})],
+        object_types=["A"],
+        object_type_column="ocel:type",
+        metadata=metadata,
+        random_state=42,
+    )
+
+    action = actions[0]
+    assert len(action.object_data_options) == 1
+    option = action.object_data_options[0]["attr"]
+    assert option["ocel:type"] == "A"
+    assert option["type"] == "OBJECT"
+    assert "size" in option
+    assert option["material"] in ["metal", "plastic"]
 
 
 # ---------------------------------------------------------------------------

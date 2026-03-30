@@ -14,7 +14,13 @@ from tree_search.tree_search import (
     TreeSearchCounterFactualParallel,
 )
 from tree_search.action_set import ActionSet
-from tree_search.action import NodeAttributeNumeric
+from tree_search.action import (
+    NodeAttributeNumeric,
+    EventNodeDeletion,
+    EventNodeSubstitution,
+    EventNodeInsertion,
+    ObjectNodeInsertion,
+)
 from process_execution.process_execution import ProcessExecution
 
 
@@ -111,6 +117,141 @@ def test_action_size_objective_and_apply(simple_process_execution, numeric_actio
     # undo should restore original value
     a.undo_changes(p_after, rec)
     assert p_after.nodes()["n1"]["attr"]["x"] == 0
+
+
+def test_action_set_conflict_prevents_substitution_on_deleted_node():
+    a = ActionSet()
+    delete_action = EventNodeDeletion(deletion_options=[["n1"]])
+    a.set_change_value(delete_action, ["n1"])
+
+    subst_action = EventNodeSubstitution(
+        event_id="n1",
+        event_data={"type": "EVENT"},
+        substitution_events=[("n2", {"type": "EVENT"})],
+    )
+
+    assert not a.is_change_allowed(subst_action, ("n2", {"type": "EVENT"}))
+
+
+def test_action_set_conflict_prevents_event_insertion_on_deleted_event():
+    a = ActionSet()
+    delete_action = EventNodeDeletion(deletion_options=[["e1"]])
+    a.set_change_value(delete_action, ["e1"])
+
+    insertion = EventNodeInsertion(
+        event_id="e1",
+        event_data_options=[{"type": "EVENT", "ocel:activity": "new"}],
+        object_ids=[],
+    )
+
+    assert not a.is_change_allowed(insertion, {"type": "EVENT", "ocel:activity": "new"})
+
+
+def test_action_set_conflict_prevents_object_insertion_on_deleted_event():
+    a = ActionSet()
+    delete_action = EventNodeDeletion(deletion_options=[["e2"]])
+    a.set_change_value(delete_action, ["e2"])
+
+    insertion = ObjectNodeInsertion(
+        event_id="e2",
+        object_data_options=[{"type": "OBJECT", "ocel:type": "X"}],
+    )
+
+    assert not a.is_change_allowed(insertion, {"type": "OBJECT", "ocel:type": "X"})
+
+
+def test_event_insertion_apply_undo():
+    p = generate_simple_process(0)
+    p.add_node("e1", attr={"type": "EVENT"})
+    p.add_node("o1", attr={"type": "OBJECT"})
+
+    event_data = {"type": "EVENT", "ocel:activity": "new"}
+    insertion = EventNodeInsertion(
+        event_id="e1",
+        event_data_options=[event_data],
+        object_ids=["o1"],
+    )
+
+    a = ActionSet()
+    a.set_change_value(insertion, event_data)
+
+    p_after, rec = a.apply_changes(p)
+    # event inserted as a new node
+    inserted_nodes = [n for n in p_after.nodes() if n.startswith("insert_event_")]
+    assert len(inserted_nodes) == 1
+    inserted = inserted_nodes[0]
+    assert p_after.has_edge("e1", inserted)
+    assert p_after.has_edge(inserted, "o1")
+
+    a.undo_changes(p_after, rec)
+    assert not p_after.has_node(inserted)
+
+
+def test_event_insertion_multiple_data_options():
+    insertion = EventNodeInsertion(
+        event_id="e1",
+        event_data_options=[
+            {"attr": {"type": "EVENT", "ocel:activity": "x"}},
+            {"attr": {"type": "EVENT", "ocel:activity": "y"}},
+        ],
+        object_ids=[],
+    )
+    assert insertion.action_space_size() == 2
+    assert {"type": "EVENT", "ocel:activity": "x"} in list(insertion.action_space())
+    assert {"type": "EVENT", "ocel:activity": "y"} in list(insertion.action_space())
+
+
+def test_object_insertion_apply_undo():
+    p = generate_simple_process(0)
+    p.add_node("e1", attr={"type": "EVENT"})
+
+    object_data = {"type": "OBJECT", "ocel:type": "new"}
+    insertion = ObjectNodeInsertion(
+        event_id="e1",
+        object_data_options=[object_data],
+    )
+
+    a = ActionSet()
+    a.set_change_value(insertion, object_data)
+
+    p_after, rec = a.apply_changes(p)
+    inserted_nodes = [n for n in p_after.nodes() if n.startswith("insert_object_")]
+    assert len(inserted_nodes) == 1
+    inserted = inserted_nodes[0]
+    assert p_after.has_edge("e1", inserted)
+
+    a.undo_changes(p_after, rec)
+    assert not p_after.has_node(inserted)
+
+
+def test_object_insertion_multiple_data_options():
+    p = generate_simple_process(0)
+    p.add_node("e1", attr={"type": "EVENT"})
+
+    insertion = ObjectNodeInsertion(
+        event_id="e1",
+        object_data_options=[
+            {"attr": {"type": "OBJECT", "ocel:type": "A"}},
+            {"attr": {"type": "OBJECT", "ocel:type": "B"}},
+        ],
+    )
+
+    assert insertion.action_space_size() == 2
+    options = list(insertion.action_space())
+    assert {"type": "OBJECT", "ocel:type": "A"} in options
+    assert {"type": "OBJECT", "ocel:type": "B"} in options
+
+    a = ActionSet()
+    a.set_change_value(insertion, {"type": "OBJECT", "ocel:type": "B"})
+
+    p_after, rec = a.apply_changes(p)
+    inserted_nodes = [n for n in p_after.nodes() if n.startswith("insert_object_")]
+    assert len(inserted_nodes) == 1
+    inserted = inserted_nodes[0]
+    assert p_after.nodes()[inserted]["attr"]["ocel:type"] == "B"
+
+    a.undo_changes(p_after, rec)
+    assert not p_after.has_node(inserted)
 
 
 def test_action_apply_multiple_action_types(

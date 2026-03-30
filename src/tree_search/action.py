@@ -1,5 +1,6 @@
 from itertools import combinations
 from math import ceil, comb
+from copy import deepcopy
 from networkx import NetworkXError
 from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_TYPE
 
@@ -265,6 +266,7 @@ class ObjectNodeSubstitution(Action):
             containing the substitute node (ID and attributes).
         event_id (Optional[str]): identifier of the event to substitute the object for.
             If not defined, the object is substituted for all events in the graph.
+        include_attributes (List[str]): list of attributes to include in the node comparison.
     """
 
     def __init__(
@@ -274,6 +276,7 @@ class ObjectNodeSubstitution(Action):
         substitution_objects: List[Tuple[str, dict]],
         event_ids: List[str],
         object_data: dict = None,
+        include_attributes: List[str] = None,
         discretized_attributes: Dict[str, Any] = None,
         **kwargs,
     ):
@@ -281,7 +284,8 @@ class ObjectNodeSubstitution(Action):
         self.object_id = object_id
         self.substitution_objects = substitution_objects
         self.event_ids = event_ids
-        self.object_data = object_data if object_data else {}
+        self.object_data = object_data or {}
+        self.include_attributes = include_attributes
         self.discretized_attributes = discretized_attributes
 
     def __repr__(self) -> str:
@@ -365,7 +369,7 @@ class ObjectNodeSubstitution(Action):
         return node_subst_cost(
             self.object_data,
             subst_node_data,
-            exclude_attributes=TYPE_ATTRIBUTES,
+            include_attributes=self.include_attributes,
             aggregation_type="sum",
             discretized_attributes=self.discretized_attributes,
         )
@@ -405,6 +409,177 @@ class ObjectNodeSubstitution(Action):
         return p
 
 
+class EventNodeSubstitution(Action):
+    """
+    Action representing possible event node substitutions in a process execution.
+    Attributes:
+        event_id (str): identifier of the event to substitute.
+        event_data (dict): data of the event to substitute.
+        substitution_events (List[str]):
+            An iterable of lists of substitution events (node IDs).
+        include_attributes (List[str]): list of attributes to include in the node comparison.
+    """
+
+    def __init__(
+        self,
+        *args,
+        event_id: str,
+        event_data: dict,
+        substitution_events: List[Tuple[str, dict]],
+        include_attributes: List[str] = None,
+        discretized_attributes: Dict[str, Any] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.event_id = event_id
+        self.event_data = event_data
+        self.substitution_events = substitution_events
+        self.include_attributes = include_attributes
+        self.discretized_attributes = discretized_attributes
+
+    def __repr__(self) -> str:
+        return f"Event {self.event_id} with {len(self.substitution_events)} substitution options"
+
+    def action_space_size(self):
+        return len(self.substitution_events)
+
+    def action_space(
+        self,
+        current_change_value: str = None,
+        max_change_size_delta: int | float = 1,
+    ) -> Iterable[Tuple[str, dict]]:
+        """
+        Generate possible substitution options for the event node action.
+        Args:
+            current_change_value (Optional[List[str]]): Current change value.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
+        Yields:
+            Iterable[Tuple[str, dict]]: substitution event.
+        """
+
+        for subst_node in self.substitution_events:
+            if self.change_size(subst_node=subst_node) <= max_change_size_delta:
+                yield subst_node
+
+    def apply_change(
+        self,
+        p: ProcessExecution,
+        substitution_event: Tuple[str, dict],
+    ) -> dict:
+        """
+        Apply the event substitution and return a small snapshot of the graph
+        state that is necessary to undo the operation.
+
+        Swaps all incoming/outgoing DF edges between self.event_id and
+        subst_event_id and swaps ocel:timestamp and epoch attributes (if present).
+        """
+        subst_event_id = substitution_event[0]
+
+        # snapshot state so undo can restore exactly
+        record: dict = {
+            "nodes": {},
+            "edges": [],
+            "had_subst": False,
+        }
+
+        for nid in (self.event_id, subst_event_id):
+            if p.has_node(nid):
+                record["nodes"][nid] = deepcopy(p.nodes[nid])
+            else:
+                # Skip if one of the two nodes does not exist in the graph
+                return record
+
+        record["had_subst"] = p.has_node(subst_event_id)
+
+        record["edges"] = [
+            (u, v, k, deepcopy(d))
+            for u, v, k, d in p.edges(keys=True, data=True)
+            if u in {self.event_id, subst_event_id}
+            or v in {self.event_id, subst_event_id}
+        ]
+
+        if not p.has_node(subst_event_id):
+            raise Exception(f"Event node {subst_event_id} does not exist")
+
+        # Collect DF edges for the two nodes
+        def df_edges(node):
+            incoming = [
+                (u, v, k, d)
+                for u, v, k, d in p.in_edges(node, keys=True, data=True)
+                if d.get("attr", {}).get("type") == "DF"
+            ]
+            outgoing = [
+                (u, v, k, d)
+                for u, v, k, d in p.out_edges(node, keys=True, data=True)
+                if d.get("attr", {}).get("type") == "DF"
+            ]
+            return incoming, outgoing
+
+        event_in, event_out = df_edges(self.event_id)
+        subst_in, subst_out = df_edges(subst_event_id)
+
+        # remove original DF edges
+        for u, v, k, _ in event_in + event_out + subst_in + subst_out:
+            if p.has_edge(u, v, key=k):
+                p.remove_edge(u, v, key=k)
+
+        # add swapped relationships
+        for u, _, k, d in event_in:
+            p.add_edge(u, subst_event_id, key=k, **{"attr": d.get("attr", {}).copy()})
+        for _, v, k, d in event_out:
+            p.add_edge(subst_event_id, v, key=k, **{"attr": d.get("attr", {}).copy()})
+
+        for u, _, k, d in subst_in:
+            p.add_edge(u, self.event_id, key=k, **{"attr": d.get("attr", {}).copy()})
+        for _, v, k, d in subst_out:
+            p.add_edge(self.event_id, v, key=k, **{"attr": d.get("attr", {}).copy()})
+
+        # swap timestamps/epoch if present in node attr dicts
+        for key in ["ocel:timestamp", "epoch"]:
+            v1 = p.nodes[self.event_id].get("attr", {}).get(key)
+            v2 = p.nodes[subst_event_id].get("attr", {}).get(key)
+            if v1 is not None or v2 is not None:
+                p.nodes[self.event_id]["attr"][key] = v2
+                p.nodes[subst_event_id]["attr"][key] = v1
+
+        return record
+
+    def change_size(self, subst_node: Tuple[str, dict] = None):
+        subst_node_data = subst_node[1] if subst_node else {}
+        return node_subst_cost(
+            self.event_data,
+            subst_node_data,
+            include_attributes=self.include_attributes,
+            aggregation_type="sum",
+            discretized_attributes=self.discretized_attributes,
+        )
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # Restore nodes as they were at snapshot time.
+        for nid, attrs in record.get("nodes", {}).items():
+            if not p.has_node(nid):
+                p.add_node(nid, **attrs)
+            else:
+                p.nodes()[nid].clear()
+                p.nodes()[nid].update(attrs)
+
+        # Remove all current edges incident to the involved nodes.
+        involved = set(record.get("nodes", {}).keys())
+        for u, v, k, _ in list(p.edges(keys=True, data=True)):
+            if u in involved or v in involved:
+                try:
+                    p.remove_edge(u, v, key=k)
+                except Exception:
+                    pass
+
+        # Restore snapshot edges.
+        for u, v, k, d in record.get("edges", []):
+            if not p.has_edge(u, v, key=k):
+                p.add_edge(u, v, key=k, **d)
+
+        return p
+
+
 class NodeDeletion(Action):
     """
     Action representing possible node deletions from a process execution.
@@ -423,10 +598,8 @@ class NodeDeletion(Action):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.deletion_options = deletion_options = (
-            deletion_options if deletion_options else []
-        )
-        self.allowed_deletions = allowed_deletions if allowed_deletions else []
+        self.deletion_options = deletion_options or []
+        self.allowed_deletions = allowed_deletions or []
 
     def __repr__(self) -> str:
         if self.deletion_options:
@@ -540,6 +713,204 @@ class NodeDeletion(Action):
                 )
                 p.remove_node(deletion_node_id)
         return record
+
+
+class EventNodeInsertion(Action):
+    """Action for inserting a new event after an existing event node."""
+
+    def __init__(
+        self,
+        *args,
+        event_id: str,
+        event_data_options: List[Dict[str, Any]],
+        object_ids: List[str] = None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.event_id = event_id
+        self.event_data_options = event_data_options
+        self.object_ids = object_ids or []
+
+    def __repr__(self) -> str:
+        return f"Insert event after {self.event_id} related to objects {self.object_ids} with {len(self.event_data_options)} data options"
+
+    def action_space_size(self):
+        return len(self.event_data_options)
+
+    def action_space(self, current_change_value=None, max_change_size_delta=1):
+        if max_change_size_delta >= 1:
+            for data in self.event_data_options:
+                if isinstance(data, dict) and "attr" in data:
+                    yield data["attr"]
+                else:
+                    yield data
+
+    def apply_change(self, p: ProcessExecution, event_data: Any = None) -> dict:
+        import uuid
+
+        selected_event = (
+            event_data if isinstance(event_data, dict) else self.event_data_options[0]
+        )
+
+        # Normalize to raw node attributes; support wrapped format {'attr': {...}}
+        if isinstance(selected_event, dict) and "attr" in selected_event:
+            node_attr = deepcopy(selected_event["attr"])
+        else:
+            node_attr = deepcopy(selected_event)
+
+        new_event_id = f"insert_event_{uuid.uuid4().hex}"
+
+        record = {
+            "new_event_id": new_event_id,
+            "event_id": self.event_id,
+            "added_node": None,
+            "old_df_edges": [],
+            "added_edges": [],
+            "added_e2o": [],
+            "event_data": selected_event,
+        }
+
+        # Create the new event node
+        p.add_node(new_event_id, attr=node_attr)
+        record["added_node"] = new_event_id
+
+        # Relink DF edges: event_id -> new_event -> old successors
+        old_df_out = [
+            (u, v, k, d.copy())
+            for u, v, k, d in p.out_edges(self.event_id, keys=True, data=True)
+            if d.get("attr", {}).get("type") == "DF"
+        ]
+
+        # Remove existing outgoing DF edges from parent event
+        for u, v, k, _ in old_df_out:
+            if p.has_edge(u, v, key=k):
+                p.remove_edge(u, v, key=k)
+
+        # Add edge from parent to new event
+        p.add_edge(self.event_id, new_event_id, attr={"type": "DF"})
+        record["added_edges"].append(
+            (self.event_id, new_event_id, {"attr": {"type": "DF"}})
+        )
+
+        # Add edge from new event to old successors
+        for _, v, _, d in old_df_out:
+            p.add_edge(new_event_id, v, attr=d.get("attr", {}).copy())
+            record["added_edges"].append((new_event_id, v, d.get("attr", {}).copy()))
+            record["old_df_edges"].append((self.event_id, v, d.get("attr", {}).copy()))
+
+        # Add E2O relationships to the specified objects
+        for obj_id in self.object_ids:
+            if p.has_node(obj_id):
+                p.add_edge(new_event_id, obj_id, attr={"type": "E2O"})
+                record["added_e2o"].append((new_event_id, obj_id))
+
+        return record
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        new_event_id = record.get("new_event_id")
+
+        # Remove edges incident to new event
+        for u, v, k, _ in list(p.edges(keys=True, data=True)):
+            if u == new_event_id or v == new_event_id:
+                try:
+                    p.remove_edge(u, v, key=k)
+                except Exception:
+                    pass
+
+        # Restore old DF edges from parent to old successors
+        for u, v, attr in record.get("old_df_edges", []):
+            if not p.has_edge(u, v):
+                p.add_edge(u, v, attr=attr)
+
+        # Remove the new event node
+        if new_event_id and p.has_node(new_event_id):
+            try:
+                p.remove_node(new_event_id)
+            except Exception:
+                pass
+
+        return p
+
+    def change_size(self, event_data: Any = None):
+        if event_data:
+            return 1
+        else:
+            return 0
+
+
+class ObjectNodeInsertion(Action):
+    """Action for inserting a new object node for a given event."""
+
+    def __init__(
+        self,
+        *args,
+        event_id: str,
+        object_data_options: List[Dict[str, Any]],
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.event_id = event_id
+        self.object_data_options = object_data_options
+
+    def __repr__(self) -> str:
+        return f"Insert object for event {self.event_id} with {len(self.object_data_options)} data options"
+
+    def action_space_size(self):
+        return len(self.object_data_options)
+
+    def action_space(self, current_change_value=None, max_change_size_delta=1):
+        if max_change_size_delta >= 1:
+            for option in self.object_data_options:
+                if isinstance(option, dict) and "attr" in option:
+                    yield option["attr"]
+                else:
+                    yield option
+
+    def apply_change(self, p: ProcessExecution, object_data: Any = None) -> dict:
+        import uuid
+
+        selected_object = (
+            object_data
+            if isinstance(object_data, dict)
+            else self.object_data_options[0]
+        )
+
+        # normalize nested attr payload
+        if isinstance(selected_object, dict) and "attr" in selected_object:
+            node_attr = deepcopy(selected_object["attr"])
+        else:
+            node_attr = deepcopy(selected_object)
+
+        new_object_id = f"insert_object_{uuid.uuid4().hex}"
+
+        record = {
+            "new_object_id": new_object_id,
+            "event_id": self.event_id,
+            "added_edge": None,
+            "object_data": selected_object,
+        }
+
+        p.add_node(new_object_id, attr=node_attr)
+        p.add_edge(self.event_id, new_object_id, attr={"type": "E2O"})
+
+        record["added_edge"] = (self.event_id, new_object_id)
+
+        return record
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        new_object_id = record.get("new_object_id")
+        if new_object_id and p.has_node(new_object_id):
+            try:
+                p.remove_node(new_object_id)
+            except Exception:
+                pass
+        return p
+
+    def change_size(self, object_data: Any = None):
+        if object_data:
+            return 1
+        else:
+            return 0
 
 
 class EventNodeDeletion(NodeDeletion):

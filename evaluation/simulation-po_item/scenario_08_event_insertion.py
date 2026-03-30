@@ -28,7 +28,7 @@ CONFIG = dict(
     items_per_po=2,
     simtime=400,
     anomaly_prob=0.3,
-    output_prefix="scenario_07",
+    output_prefix="scenario_08",
     seed=707,
     # Start with reminder OFF globally; we will enable it for normal POs only
     send_reminder_mandatory=False,

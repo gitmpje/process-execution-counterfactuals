@@ -105,6 +105,11 @@ class TreeSearchCounterFactual:
                 action_set_prime = copy(action_set)
                 action_set_prime.set_change_value(action, change_value)
 
+                # Skip if this candidate conflicts with existing modifications
+                if not action_set_prime.is_change_allowed(action, change_value):
+                    self.logger.debug("Not allowed: %s", action_set_prime)
+                    continue
+
                 eval_result = evaluate_action_set(action_set_prime, process_execution)
                 if eval_result:
                     selected_action_sets.append(copy(action_set_prime))
