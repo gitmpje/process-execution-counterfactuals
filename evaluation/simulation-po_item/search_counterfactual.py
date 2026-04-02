@@ -8,7 +8,9 @@ import yaml
 from copy import deepcopy
 from networkx import Graph
 from random import seed
+from torch_geometric.utils import to_dgl
 
+from NSEG.GCN.model import GCN
 from tree_search.action_helpers import (
     build_node_attribute_actions,
     build_object_substitution_actions,
@@ -19,12 +21,14 @@ from tree_search.action_helpers import (
     construct_attribute_spec_dict,
     get_nodes_by_importance,
     get_feature_labels_by_importance,
+    get_nodes_by_importance_dgl,
+    get_feature_labels_by_importance_dgl,
 )
 from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
 
 from gnn.hetero_graph_data import build_hetero_data
-from gnn.utils import Metadata, generate_explanation
+from gnn.utils import Metadata, generate_explanation, generate_explanation_dgl
 from process_execution.process_execution import extract_process_execution
 
 from utils import _replace_scenario_prefix, visualize_process_execution
@@ -35,7 +39,7 @@ with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
 # Replace $SCENARIO_PREFIX tokens in config
-SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX")
+SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX", "scenario_01")
 if SCENARIO_PREFIX is not None:
     cfg = _replace_scenario_prefix(cfg, SCENARIO_PREFIX)
 
@@ -88,7 +92,23 @@ ocel_nx = pm4py.convert_ocel_to_networkx(ocel)
 
 # %% Load model and define process outcome function
 device = "cuda" if torch.cuda.is_available() else "cpu"
-model = torch.load(path_model, weights_only=False)
+# model = torch.load(path_model, weights_only=False)
+
+num_classes = 2
+feat_dim = 22
+hidden_dims = [64, 64]
+num_gnn_layers = len(hidden_dims)
+model = GCN(
+    dim_input=feat_dim,
+    dim_hidden=hidden_dims,
+    num_classes=num_classes,
+    dropout=0.5,
+    num_layers=num_gnn_layers,
+    mode="graph",
+)
+model_state = torch.load(path_model, weights_only=True)
+model.load_state_dict(model_state)
+
 model = model.to(device)
 model.eval()
 
@@ -136,6 +156,35 @@ def process_outcome(p: Graph) -> bool:
     return bool(out.argmax(dim=-1).cpu().item())
 
 
+@torch.no_grad()
+def process_outcome_dgl(p: Graph) -> bool:
+    """Predict the outcome for a single `ProcessExecution` using the loaded GNN model.
+
+    Args:
+        ocel_graph (Graph): The process execution to classify.
+    Returns:
+        float: The predicted value.
+    """
+    data, _, _, _, _, _ = build_hetero_data(
+        graph=p,
+        node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
+        object_type_col=ocel.object_type_column,
+        event_activity_col=ocel.event_activity,
+        viewpoint=metadata.viewpoint,
+        normalize=metadata.normalized,
+        one_hot_encoding=metadata.one_hot_encoding,
+        add_reverse_edges=metadata.add_reverse_edges,
+    )
+
+    data = to_dgl(data.to_homogeneous())
+    data = data.to(device)
+    feat = data.ndata["x"].to(device)
+
+    out = model(data, feat).squeeze(0)
+    return bool(out.argmax(dim=-1).cpu().item())
+
+
 # Determine viewpoint_event_id from labels file + config label
 with open(path_labels, "r") as f:
     labels_data = json.load(f)
@@ -153,7 +202,7 @@ for event_id, event_label in labels_data["viewpoint_event_labels"].items():
             target_activity_type=process_execution_target_activity,
             backward=trace_backward,
         )
-        if process_outcome(process_execution) == viewpoint_event_label:
+        if process_outcome_dgl(process_execution) == viewpoint_event_label:
             viewpoint_event_id = event_id
         break
 
@@ -193,9 +242,9 @@ visualize_process_execution(
     target_process_execution, f"data/{SCENARIO_PREFIX}-target_pe.svg"
 )
 
-counterfactual_label = not process_outcome(target_process_execution)
+counterfactual_label = not process_outcome_dgl(target_process_execution)
 
-target_explanation, feat_label_dict, node_label_dict = generate_explanation(
+target_explanation = generate_explanation_dgl(
     G=target_process_execution,
     metadata=metadata,
     model=model,
@@ -204,24 +253,40 @@ target_explanation, feat_label_dict, node_label_dict = generate_explanation(
     verbose=True,
 )
 
+data, _, _, _, feat_label_dict, node_label_dict = build_hetero_data(
+    graph=target_process_execution,
+    node_num_keys=metadata.node_num_keys,
+    node_cat_keys=metadata.node_cat_keys,
+    object_type_col=ocel.object_type_column,
+    event_activity_col=ocel.event_activity,
+    viewpoint=metadata.viewpoint,
+    normalize=metadata.normalized,
+    one_hot_encoding=metadata.one_hot_encoding,
+    add_reverse_edges=metadata.add_reverse_edges,
+)
+homo = data.to_homogeneous()
+dgl_graph = to_dgl(homo)
+
+node_labels = node_label_dict["EVENT"] + node_label_dict["item"] + node_label_dict["PO"]
 nodes_ordered = [
     n["label"]
-    for n in get_nodes_by_importance(
-        explanation=target_explanation, node_label_dict=node_label_dict
+    for n in get_nodes_by_importance_dgl(
+        dgl_graph=dgl_graph,
+        feat_mask=target_explanation["feat_mask"],
+        node_labels=node_labels,
     )
     if n["importance"] >= node_importance_threshold
 ]
-attr_ordered = {
-    node_type: [
-        f["feature"] for f in features if f["importance"] >= attr_importance_threshold
-    ]
-    for node_type, features in get_feature_labels_by_importance(
-        explanation=target_explanation,
-        feat_label_dict=feat_label_dict,
+feat_labels = feat_label_dict["EVENT"] + feat_label_dict["item"] + feat_label_dict["PO"]
+attr_ordered = [
+    d["feature"]
+    for d in get_feature_labels_by_importance_dgl(
+        feat_mask=target_explanation["feat_mask"],
+        feat_labels=feat_labels,
         node_cat_keys=metadata.node_cat_keys,
         one_hot_encoding=metadata.one_hot_encoding,
-    ).items()
-}
+    )
+]
 
 # Actions for object node attributes
 object_node_attributes = build_node_attribute_actions(
@@ -356,7 +421,7 @@ else:
 
 # %% Run tree search algorithm to find counter factuals
 tree_search = TreeSearchCounterFactual(
-    process_outcome=process_outcome,
+    process_outcome=process_outcome_dgl,
     max_change_size=max_change_size,
     counterfactual_label=counterfactual_label,
     log_file="logs/simulation-po_item.log",

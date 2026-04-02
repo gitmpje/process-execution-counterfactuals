@@ -1,14 +1,19 @@
 from dataclasses import dataclass
 from networkx import Graph
 from pandas import DataFrame
+import torch
+import torch.nn as nn
 from torch import save as tsave
 from torch import long, zeros
 from torch_geometric.data import HeteroData
+from torch_geometric.utils import to_dgl
 from torch_geometric.explain import (
     Explainer,
     GNNExplainer,
     HeteroExplanation,
 )
+import dgl
+from dgl.nn.pytorch.explain import GNNExplainer as DGLGNNExplainer
 from typing import Callable, Dict, List, Optional, Tuple, Any
 
 
@@ -442,4 +447,127 @@ def generate_explanation(
         explanation,
         feat_label_dict,
         node_label_dict,
+    )
+
+
+def generate_explanation_dgl_graph(
+    dgl_graph: dgl.DGLGraph,
+    model: nn.Module,
+    node_feature_key: str = "x",
+    num_hops: int = 2,
+    epochs: int = 100,
+    lr: float = 0.01,
+    alpha1: float = 0.005,
+    alpha2: float = 1.0,
+    beta1: float = 1.0,
+    beta2: float = 0.1,
+    log: bool = False,
+    device=None,
+    verbose: bool = False,
+):
+    """Explain a DGL graph using DGL GNNExplainer and an NSEG GCN model.
+
+    Assumes the graph is homogenous and node features are stored in dgl_graph.ndata[node_feature_key].
+    The model should match the NSEG.GCN.model.GCN api: forward(graph, feat, eweight=None).
+    """
+    if device is None:
+        device = next(model.parameters()).device
+
+    model = model.to(device)
+    model.eval()
+
+    if node_feature_key not in dgl_graph.ndata:
+        raise KeyError(
+            f"Node feature key '{node_feature_key}' not found in dgl_graph.ndata"
+        )
+
+    g = dgl_graph.to(device)
+    feat = g.ndata[node_feature_key].to(device)
+
+    # If the graph is read-only and not a homogeneous graph with features in expected key, adapt before explain.
+    explainer = DGLGNNExplainer(
+        model=model,
+        num_hops=num_hops,
+        lr=lr,
+        num_epochs=epochs,
+        alpha1=alpha1,
+        alpha2=alpha2,
+        beta1=beta1,
+        beta2=beta2,
+        log=log,
+    )
+
+    feat_mask, edge_mask = explainer.explain_graph(g, feat)
+
+    with torch.no_grad():
+        logits = model(g, feat)
+        pred = logits.detach().cpu()
+
+    if verbose:
+        print("DGL GNN explainer output")
+        print(f"  prediction shape: {pred.shape}")
+        if feat_mask is not None:
+            top_feat = torch.topk(
+                feat_mask, min(10, feat_mask.numel())
+            ).indices.tolist()
+            print(f"  top {min(10, feat_mask.numel())} feature indices: {top_feat}")
+        if edge_mask is not None:
+            top_edges = torch.topk(
+                edge_mask, min(10, edge_mask.numel())
+            ).indices.tolist()
+            print(f"  top {min(10, edge_mask.numel())} edge indices: {top_edges}")
+
+    return {
+        "feat_mask": feat_mask,
+        "edge_mask": edge_mask,
+        "pred_logits": pred,
+    }
+
+
+def generate_explanation_dgl(
+    G: Graph,
+    metadata: Metadata,
+    model: nn.Module,
+    object_type_col: str,
+    event_activity_col: str,
+    node_feature_key: str = "x",
+    num_hops: int = 2,
+    epochs: int = 100,
+    lr: float = 0.01,
+    alpha1: float = 0.005,
+    alpha2: float = 1.0,
+    beta1: float = 1.0,
+    beta2: float = 0.1,
+    log: bool = False,
+    device=None,
+    verbose: bool = False,
+):
+    """Convert HeteroData -> DGL and explain using generate_explanation_dgl."""
+    data, _, _, _, _, _ = build_hetero_data(
+        graph=G,
+        node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
+        object_type_col=object_type_col,
+        event_activity_col=event_activity_col,
+        viewpoint=metadata.viewpoint,
+        normalize=metadata.normalized,
+        one_hot_encoding=metadata.one_hot_encoding,
+        add_reverse_edges=metadata.add_reverse_edges,
+    )
+    homo = data.to_homogeneous()
+    dgl_graph = to_dgl(homo)
+    return generate_explanation_dgl_graph(
+        dgl_graph=dgl_graph,
+        model=model,
+        node_feature_key=node_feature_key,
+        num_hops=num_hops,
+        epochs=epochs,
+        lr=lr,
+        alpha1=alpha1,
+        alpha2=alpha2,
+        beta1=beta1,
+        beta2=beta2,
+        log=log,
+        device=device,
+        verbose=verbose,
     )

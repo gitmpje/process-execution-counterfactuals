@@ -145,6 +145,89 @@ def get_feature_labels_by_importance(
     return out
 
 
+def get_nodes_by_importance_dgl(
+    dgl_graph,
+    feat_mask,
+    node_labels: Optional[List[str]] = None,
+    top_k=None,
+):
+    """Return node-level importance based on DGL GNNExplainer feature mask.
+
+    For each node, importance is computed as a weighted sum of node feature
+    values with the feature importance mask.
+    """
+    if feat_mask is None:
+        return []
+
+    if not isinstance(feat_mask, Tensor):
+        feat_mask = Tensor(feat_mask)
+
+    if "x" not in dgl_graph.ndata:
+        raise KeyError("dgl_graph.ndata['x'] is required for node importance")
+
+    node_feats = dgl_graph.ndata["x"].detach().cpu()
+    if node_feats.ndim != 2 or node_feats.size(1) != feat_mask.numel():
+        raise ValueError(
+            f"Node features shape mismatch: {node_feats.shape} vs feat_mask {feat_mask.shape}"
+        )
+
+    per_node_importance = (node_feats * feat_mask.cpu().unsqueeze(0)).sum(dim=1)
+
+    results = []
+    for i, v in enumerate(per_node_importance.tolist()):
+        label = None
+        if node_labels is not None:
+            label = node_labels[i]
+        results.append({"node_index": i, "label": label, "importance": float(v)})
+
+    results_sorted = sorted(results, key=lambda x: x["importance"], reverse=True)
+    return results_sorted[:top_k] if top_k is not None else results_sorted
+
+
+def get_feature_labels_by_importance_dgl(
+    feat_mask,
+    feat_labels: Optional[List[str]] = None,
+    node_cat_keys: Optional[Dict[str, Dict[str, List[Any]]]] = None,
+    one_hot_encoding: bool = False,
+    top_k=None,
+):
+    """Return DGL feature importance labels from the global feature mask."""
+    if feat_mask is None:
+        return []
+
+    if not isinstance(feat_mask, Tensor):
+        feat_mask = Tensor(feat_mask)
+
+    per_feat = feat_mask.detach().cpu().view(-1)
+    labels = feat_labels or [f"feat_{i}" for i in range(per_feat.size(0))]
+
+    if one_hot_encoding and node_cat_keys:
+        category_labels = {
+            f"{k}[{label}]": k
+            for d1 in node_cat_keys.values()
+            for k, v in d1.items()
+            for label in v
+        }
+        category_vals: Dict[str, List[float]] = {}
+        for i, v in enumerate(per_feat.tolist()):
+            fname = labels[i] if i < len(labels) else f"feat_{i}"
+            base = category_labels[fname] if fname in category_labels else fname
+            category_vals.setdefault(base, []).append(v)
+
+        pairs = [
+            {"feature": cat, "importance": float(sum(vals) / len(vals))}
+            for cat, vals in category_vals.items()
+        ]
+    else:
+        pairs = [
+            {"feature": labels[i] if i < len(labels) else f"feat_{i}", "importance": float(v)}
+            for i, v in enumerate(per_feat.tolist())
+        ]
+
+    pairs_sorted = sorted(pairs, key=lambda x: x["importance"], reverse=True)
+    return pairs_sorted[:top_k] if top_k is not None else pairs_sorted
+
+
 def build_object_substitution_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     ocel_nodes: Iterable[Tuple[Any, Any]],
@@ -522,12 +605,24 @@ def build_node_attribute_actions(
 
         # Determine attribute ordering for this node
         if attr_order is not None:
-            if node_type == "EVENT":
-                ordered_attrs = attr_order.get("EVENT", [])
+            if isinstance(attr_order, (list, tuple)):
+                ordered_attrs = list(attr_order)
+            elif isinstance(attr_order, dict):
+                if node_type == "EVENT":
+                    ordered_attrs = attr_order.get("EVENT")
+                    if ordered_attrs is None:
+                        ordered_attrs = attr_order.get("default")
+                else:
+                    node_obj_type = attr.get(object_type_column, "")
+                    ordered_attrs = attr_order.get(node_obj_type)
+                    if ordered_attrs is None:
+                        ordered_attrs = attr_order.get("default")
+                if ordered_attrs is None:
+                    ordered_attrs = []
             else:
-                node_obj_type = attr.get(object_type_column, "")
-                ordered_attrs = attr_order.get(node_obj_type, [])
-
+                raise TypeError(
+                    "attr_order must be either a dict or a list/tuple of attribute keys"
+                )
             attr_iter = (a for a in ordered_attrs if a in attr)
         else:
             attr_iter = (a for a in list(attr.keys()) if a in attribute_spec_dict)
