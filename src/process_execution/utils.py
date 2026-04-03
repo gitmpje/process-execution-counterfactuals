@@ -85,7 +85,7 @@ def build_ocel_dfg(
 
 
 # Store graph to GraphML format
-def store_ocel_dfg_graphml(ocel_nx: MultiDiGraph, path_graphml: str):
+def store_ocel_dfg_graphml(ocel_nx: MultiDiGraph, path_graphml: str) -> None:
     """Store OCEL DFG graph to GraphML format, handling JSON-serializable attributes.
 
     Args:

@@ -77,7 +77,13 @@ def apply_node_styles_nx(
     return G
 
 
-def apply_edge_styles_nx(G: ProcessExecution):
+def apply_edge_styles_nx(G: ProcessExecution) -> None:
+    """
+    Apply edge styles to the graph.
+
+    Args:
+        G: The process execution graph.
+    """
     for _, _, ed in G.edges(data=True):
         if ed["attr"].get("type", "") in ("DF", "DF_agg"):
             ed["style"] = "solid"
@@ -95,7 +101,7 @@ def visualize_with_svg_and_js(
     trace_graph: ProcessExecution,
     normalized_subgraphs: list = None,
     out_prefix: str = "process_execution",
-):
+) -> None:
     """Create an interactive HTML using native SVG with Graphviz layout, preserving original agraph styles.
     Includes JavaScript-based toggle buttons to highlight normalized process executions.
 

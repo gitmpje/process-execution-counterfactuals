@@ -173,6 +173,14 @@ class GCNWithEdgeAgg(torch.nn.Module):
     """
 
     def __init__(self, in_channels, hidden=64, num_classes=2):
+        """
+        Initialize the GCNWithEdgeAgg model.
+
+        Args:
+            in_channels: Number of input features.
+            hidden: Number of hidden units.
+            num_classes: Number of output classes.
+        """
         super().__init__()
         self.conv1 = GCNConv(in_channels, hidden)
         self.conv2 = GCNConv(hidden, hidden)
@@ -247,6 +255,15 @@ def evaluate_acc(model, loader, device) -> Tuple[float, float, List[int], List[i
 
 
 def build_dataset_from_graph_dict(graphs: Dict[str, nx.Graph]) -> List[Data]:
+    """
+    Build a PyG dataset from a dictionary of graphs.
+
+    Args:
+        graphs: Dictionary of graphs.
+
+    Returns:
+        List of PyG Data objects.
+    """
     # Build dataset
     node_label_vocab, node_num_keys, edge_num_keys = build_vocab_and_numeric_keys(
         graphs
@@ -266,7 +283,7 @@ def build_dataset_from_graph_dict(graphs: Dict[str, nx.Graph]) -> List[Data]:
 
 def train_gnn_graph_classification(
     graphs: Dict[str, nx.Graph], model_path: str = None, model_weights_path: str = None
-):
+) -> None:
     """
     Train a GNN for graph classification on process execution graphs.
     Args:

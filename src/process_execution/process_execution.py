@@ -1,10 +1,15 @@
 from itertools import combinations
-from typing import Generator, List, Set, Tuple
+from typing import Dict, Generator, List, Set, Tuple
 from networkx import all_simple_edge_paths, edge_subgraph, MultiDiGraph, Graph, subgraph
 
 
 class ProcessExecution(MultiDiGraph):
-    def construct_node_label(G: Graph):
+    """
+    A class representing a process execution as a MultiDiGraph.
+    Inherits from NetworkX MultiDiGraph.
+    """
+
+    def construct_node_label(G: Graph) -> None:
         """
         Construct label based on attributes from node['attr'].
         - G (Graph): NetworkX OCEL graph
@@ -22,7 +27,7 @@ class ProcessExecution(MultiDiGraph):
                 )
                 data["label"] = f"{node_type}_{type_activity}"
 
-    def construct_edge_label(G: Graph):
+    def construct_edge_label(G: Graph) -> None:
         """
         Construct label based on attributes from edge['attr'].
         - G (Graph): NetworkX OCEL graph
@@ -38,7 +43,7 @@ class ProcessExecution(MultiDiGraph):
                     f"{edge_type}_{edge_qualifier}" if edge_qualifier else edge_type
                 )
 
-    def select_node_attr(G: Graph, attr_key: str):
+    def select_node_attr(G: Graph, attr_key: str) -> None:
         """
         Add value from node['attr'][attr_key] as attribute 'selected_attr' of the nodes.
         - G (Graph): networkx OCEL graph
@@ -183,7 +188,7 @@ def check_edges_normalize(edges: List[Tuple[str]], normalize_events: List[str]) 
     return False
 
 
-def get_all_edges(paths):
+def get_all_edges(paths) -> set:
     """Get union of all edges from a set of paths."""
     edges = set()
     for path in paths:
@@ -217,7 +222,7 @@ def is_valid_and_maximal(T, S, normalize_events) -> bool:
 
 def get_maximal_combinations_optimized(
     S: List[Tuple[str]], normalize_events: List[str]
-):
+) -> Tuple[Set, Dict]:
     """
     Directly construct maximal valid combinations without generating all subsets.
 

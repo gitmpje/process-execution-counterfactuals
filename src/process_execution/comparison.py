@@ -3,7 +3,7 @@ from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_
 from typing import Any, Dict, List
 
 
-def node_type_diff(n1, n2):
+def node_type_diff(n1, n2) -> int:
     """
     Compute type difference score.
     If node type (EVENT or OBJECT) is different return 1.
@@ -33,7 +33,17 @@ def node_type_diff(n1, n2):
 
 
 def attribute_diff_numeric(v1, v2, interval_size: int | float = None):
-    # Numeric comparison: relative difference
+    """
+    Compute numeric attribute difference.
+
+    Args:
+        v1: First value.
+        v2: Second value.
+        interval_size: Interval size for normalization.
+
+    Returns:
+        float: Difference score.
+    """
     try:
         a = float(v1)
         b = float(v2)
@@ -48,7 +58,18 @@ def attribute_diff_numeric(v1, v2, interval_size: int | float = None):
         return 0.0 if v1 == v2 else 1.0
 
 
-def attribute_diff(v1, v2, interval_size: int | float = None):
+def attribute_diff(v1, v2, interval_size: int | float = None) -> float:
+    """
+    Compute attribute difference.
+
+    Args:
+        v1: First value.
+        v2: Second value.
+        interval_size: Interval size for normalization.
+
+    Returns:
+        float: Difference score.
+    """
     # Treat booleans as exact match
     if isinstance(v1, bool) or isinstance(v2, bool):
         return 0.0 if v1 == v2 else 1.0
@@ -65,7 +86,7 @@ def node_attribute_diffs(
     n2,
     include_attributes: List[str] = None,
     discretized_attributes: Dict[str, Any] = None,
-):
+) -> List[float]:
     """
     Compute node attribute differences.
     """
@@ -102,7 +123,22 @@ def node_subst_cost(
     include_attributes: List[str] = None,
     aggregation_type: str = "average",
     discretized_attributes: Dict[str, Any] = None,
-):
+) -> float:
+    """
+    Compute node substitution cost.
+
+    Args:
+        n1: First node.
+        n2: Second node.
+        w_type: Weight for type difference.
+        w_attr: Weight for attribute difference.
+        include_attributes: Attributes to include.
+        aggregation_type: Aggregation type.
+        discretized_attributes: Discretized attributes.
+
+    Returns:
+        float: Substitution cost.
+    """
     # Type difference
     t_diff = node_type_diff(n1, n2)
 
@@ -127,31 +163,86 @@ def node_subst_cost(
             raise NotImplementedError(f"{aggregation_type} not implemented")
 
         return w_type * t_diff + w_attr * attr_diff
-    else:
-        return t_diff
 
 
-def edge_subst_cost(e1, e2):
+
+def edge_subst_cost(e1, e2) -> int:
+    """
+    Compute edge substitution cost.
+
+    Args:
+        e1: First edge.
+        e2: Second edge.
+
+    Returns:
+        int: Cost.
+    """
     return 0 if e1 == e2 else 1
 
 
-def node_del_cost(n):
+def node_del_cost(n) -> int:
+    """
+    Compute node deletion cost.
+
+    Args:
+        n: Node.
+
+    Returns:
+        int: Cost.
+    """
     return 1
 
 
-def edge_del_cost(e):
+def edge_del_cost(e) -> int:
+    """
+    Compute edge deletion cost.
+
+    Args:
+        e: Edge.
+
+    Returns:
+        int: Cost.
+    """
     return 1
 
 
-def node_ins_cost(n):
+def node_ins_cost(n) -> int:
+    """
+    Compute node insertion cost.
+
+    Args:
+        n: Node.
+
+    Returns:
+        int: Cost.
+    """
     return 1
 
 
-def edge_ins_cost(e):
+def edge_ins_cost(e) -> int:
+    """
+    Compute edge insertion cost.
+
+    Args:
+        e: Edge.
+
+    Returns:
+        int: Cost.
+    """
     return 1
 
 
-def ocel_graph_edit_distance(g1, g2):
+def ocel_graph_edit_distance(g1, g2) -> float:
+    """
+    Compute graph edit distance for OCEL graphs.
+
+    Args:
+        g1: First graph.
+        g2: Second graph.
+
+    Returns:
+        float: Edit distance.
+    """
     graph_edit_distance(
         g1,
         g2,

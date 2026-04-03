@@ -31,7 +31,7 @@ def _extract_attr(node_data: Any) -> Dict:
 
 def get_nodes_by_importance(
     explanation: HeteroExplanation, node_label_dict: Dict[str, List[str]], top_k=None
-):
+) -> List[Dict]:
     """Return a list of nodes ordered by importance (descending).
 
     Each entry is a dict with keys: `node_type`, `node_index`, `label`, `importance`.
@@ -81,7 +81,7 @@ def get_feature_labels_by_importance(
     node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]] = None,
     one_hot_encoding: bool = False,
     top_k=None,
-):
+) -> Dict[str, List]:
     """Return per-node-type feature labels ordered by importance.
 
     For each node type, features are aggregated across nodes (mean) and

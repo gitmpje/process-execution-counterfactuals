@@ -71,7 +71,7 @@ class TreeSearchCounterFactual:
         actions: List[Action],
         process_execution: ProcessExecution,
         change_size=1,
-    ):
+    ) -> Tuple[List, List]:
         def evaluate_action_set(
             action_set: ActionSet, process_execution: ProcessExecution
         ):
@@ -216,7 +216,7 @@ class TreeSearchCounterFactual:
 
         return []
 
-    def _configure_logger(self):
+    def _configure_logger(self) -> logging.Logger:
         logger = logging.getLogger(__name__)
         logger.setLevel(self.log_level)
 
@@ -271,7 +271,7 @@ class TreeSearchCounterFactualParallel(TreeSearchCounterFactual):
         actions_actions: List[Tuple[ActionSet, List[Action]]],
         process_execution: ProcessExecution,
         change_size=1,
-    ):
+    ) -> List | None:
         """
         Recursively enumerate possible actions to find counterfactuals.
         Explore actions on a layer in parallel.

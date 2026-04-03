@@ -27,9 +27,10 @@ class Action:
 
     def __init__(
         self,
-    ): ...
+    ):
+        """Initialize the Action base class."""
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         if self is other:
             return True
         if type(self) is not type(other):
@@ -37,7 +38,7 @@ class Action:
 
         return self.__dict__ == other.__dict__
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         # Subclasses should provide a reasonable __repr__ implementation
         # that reflects the important attributes.
         return hash(repr(self))
@@ -62,7 +63,7 @@ class NodeAttributeNumeric(Action):
     Action representing a node attribute that can be modified.
     Attributes:
         node_id (str): Identifier of the node whose attribute is being modified.
-        attribute_name (str): Nme of the attribute to be modified.
+        attribute_name (str): Name of the attribute to be modified.
         value_original (int | float): Original value of the node attribute.
     """
 
@@ -77,6 +78,17 @@ class NodeAttributeNumeric(Action):
         value_max: int | float,
         **kwargs,
     ):
+        """
+        Initialize NodeAttributeNumeric action.
+
+        Args:
+            node_id: Identifier of the node.
+            attribute_name: Name of the attribute.
+            value_original: Original value.
+            value_step: Step size for changes.
+            value_min: Minimum value.
+            value_max: Maximum value.
+        """
         super().__init__(*args, **kwargs)
         self.node_id = node_id
         self.attribute_name = attribute_name
@@ -88,7 +100,7 @@ class NodeAttributeNumeric(Action):
     def __repr__(self) -> str:
         return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
 
-    def action_space_size(self):
+    def action_space_size(self) -> int:
         return ceil((self.value_max - self.value_original) / self.value_step) + ceil(
             (self.value_original - self.value_min) / self.value_step
         )
@@ -161,7 +173,7 @@ class NodeAttributeNumeric(Action):
         node["attr"][self.attribute_name] = old + delta_value
         return old
 
-    def change_size(self, change_value=0):
+    def change_size(self, change_value=0) -> float:
         return attribute_diff_numeric(
             self.value_original,
             self.value_original + change_value,
@@ -180,7 +192,7 @@ class NodeAttributeCategorical(Action):
     Action representing a node attribute that can be modified.
     Attributes:
         node_id (str): Identifier of the node whose attribute is being modified.
-        attribute_name (str): Nme of the attribute to be modified.
+        attribute_name (str): Name of the attribute to be modified.
         value_original (int | float): Original value of the node attribute.
         value_range (Iterable): Range of possible values for the attribute.
     """
@@ -194,6 +206,15 @@ class NodeAttributeCategorical(Action):
         category_values: List[str],
         **kwargs,
     ):
+        """
+        Initialize NodeAttributeCategorical action.
+
+        Args:
+            node_id: Identifier of the node.
+            attribute_name: Name of the attribute.
+            value_original: Original value.
+            category_values: List of possible values.
+        """
         super().__init__(*args, **kwargs)
         self.node_id = node_id
         self.attribute_name = attribute_name
@@ -203,7 +224,7 @@ class NodeAttributeCategorical(Action):
     def __repr__(self) -> str:
         return f"{self.node_id} - {self.attribute_name} (action space size {self.action_space_size()})"
 
-    def action_space_size(self):
+    def action_space_size(self) -> int:
         return len([v for v in self.category_values if v != self.value_original])
 
     def action_space(
@@ -244,7 +265,7 @@ class NodeAttributeCategorical(Action):
         node["attr"][self.attribute_name] = value
         return old
 
-    def change_size(self, change_value=0):
+    def change_size(self, change_value=0) -> int:
         return attribute_diff(
             self.value_original,
             change_value,
@@ -280,6 +301,17 @@ class ObjectNodeSubstitution(Action):
         discretized_attributes: Dict[str, Any] = None,
         **kwargs,
     ):
+        """
+        Initialize ObjectNodeSubstitution action.
+
+        Args:
+            object_id: Identifier of the object to substitute.
+            substitution_objects: List of substitution objects.
+            event_ids: List of event IDs.
+            object_data: Object data.
+            include_attributes: Attributes to include.
+            discretized_attributes: Discretized attributes.
+        """
         super().__init__(*args, **kwargs)
         self.object_id = object_id
         self.substitution_objects = substitution_objects
@@ -291,7 +323,7 @@ class ObjectNodeSubstitution(Action):
     def __repr__(self) -> str:
         return f"Event(s) {self.event_ids} - object {self.object_id} with {len(self.substitution_objects)} substitution options"
 
-    def action_space_size(self):
+    def action_space_size(self) -> int:
         return len(self.substitution_objects)
 
     def action_space(

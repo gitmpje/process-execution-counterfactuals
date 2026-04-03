@@ -19,7 +19,7 @@ from tree_search.action import (
 INDENTATION = 2
 
 
-def make_json_safe(obj):
+def make_json_safe(obj) -> Any:
     """Recursively convert Python objects into JSON‑serializable structures."""
     if isinstance(obj, dict):
         return {make_json_safe(k): make_json_safe(v) for k, v in obj.items()}
@@ -51,6 +51,17 @@ class ActionSet:
         ] = None,
         node_deletion: Dict[EventNodeDeletion, List[str]] = None,
     ):
+        """
+        Initialize an ActionSet with various types of modifications.
+
+        Args:
+            node_attributes_modification: Dictionary of node attribute modifications.
+            event_insertion: Dictionary of event insertions.
+            event_substitution: Dictionary of event substitutions.
+            object_insertion: Dictionary of object insertions.
+            object_substitution: Dictionary of object substitutions.
+            node_deletion: Dictionary of node deletions.
+        """
         self.node_attributes_modification = node_attributes_modification or {}
         self.event_substitution = event_substitution or {}
         self.object_substitution = object_substitution or {}
@@ -58,7 +69,7 @@ class ActionSet:
         self.object_insertion = object_insertion or {}
         self.node_deletion = node_deletion or {}
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         # Pre-process substitution dictionaries
         event_substitution = {
             k: make_json_safe(v[0]) for k, v in self.event_substitution.items()
@@ -88,7 +99,7 @@ class ActionSet:
         formatted = json.dumps(full_dict, indent=INDENTATION)
         return f"ActionSet<{id(self)}>\n" + indent(formatted, " " * INDENTATION)
 
-    def __copy__(self):
+    def __copy__(self) -> "ActionSet":
         """
         Make a shallow copy of this object.
         """
@@ -104,7 +115,7 @@ class ActionSet:
         )
         return new_obj
 
-    def __eq__(self, other):
+    def __eq__(self, other) -> bool:
         """
         Equality check for ActionSet objects.
         """
@@ -151,7 +162,7 @@ class ActionSet:
 
         return p
 
-    def __ne__(self, other):
+    def __ne__(self, other) -> bool:
         """
         Inequality check for ActionSet objects.
         """
@@ -281,7 +292,7 @@ class ActionSet:
         else:
             raise NotImplementedError(f"Action of type {type(action)} is not supported")
 
-    def set_change_value(self, action: Action, value: Any):
+    def set_change_value(self, action: Action, value: Any) -> None:
         """
         Set the change value for a given action.
         Args:

@@ -33,6 +33,12 @@ class Metadata:
     add_reverse_edges: bool
 
     def to_dict(self) -> Dict[str, Any]:
+        """
+        Convert the Metadata instance to a dictionary.
+
+        Returns:
+            Dict containing the metadata.
+        """
         return {
             "viewpoint": self.viewpoint,
             "node_num_keys": self.node_num_keys,
