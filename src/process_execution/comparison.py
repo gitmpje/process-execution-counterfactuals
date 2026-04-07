@@ -142,28 +142,26 @@ def node_subst_cost(
     # Type difference
     t_diff = node_type_diff(n1, n2)
 
-    # Only consider attribute difference if nodes are of the same type
-    if t_diff == 0:
-        attr_diffs = node_attribute_diffs(
-            n1,
-            n2,
-            include_attributes=include_attributes,
-            discretized_attributes=discretized_attributes,
-        )
-        if aggregation_type == "average":
-            # Return average difference across attributes (0..1)
-            attr_diff = float(sum(attr_diffs)) / len(attr_diffs)
-        elif aggregation_type == "count":
-            # Count differences > 0
-            attr_diff = len([v for v in attr_diffs if v != 0])
-        elif aggregation_type == "sum":
-            # Return sum of difference across attributes
-            attr_diff = float(sum(attr_diffs))
-        else:
-            raise NotImplementedError(f"{aggregation_type} not implemented")
+    # Node attribute differences
+    attr_diffs = node_attribute_diffs(
+        n1,
+        n2,
+        include_attributes=include_attributes,
+        discretized_attributes=discretized_attributes,
+    )
+    if aggregation_type == "average":
+        # Return average difference across attributes (0..1)
+        attr_diff = float(sum(attr_diffs)) / len(attr_diffs)
+    elif aggregation_type == "count":
+        # Count differences > 0
+        attr_diff = len([v for v in attr_diffs if v != 0])
+    elif aggregation_type == "sum":
+        # Return sum of difference across attributes
+        attr_diff = float(sum(attr_diffs))
+    else:
+        raise NotImplementedError(f"{aggregation_type} not implemented")
 
-        return w_type * t_diff + w_attr * attr_diff
-
+    return w_type * t_diff + w_attr * attr_diff
 
 
 def edge_subst_cost(e1, e2) -> int:
