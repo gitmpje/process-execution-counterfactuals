@@ -24,7 +24,8 @@ from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
 
 from gnn.hetero_graph_data import build_hetero_data
-from gnn.utils import Metadata, generate_explanation
+from gnn.utils import Metadata
+from gnn.explanation import generate_explanation
 from process_execution.process_execution import extract_process_execution
 
 from utils import _replace_scenario_prefix, visualize_process_execution
@@ -58,6 +59,7 @@ trace_backward = process_execution_cfg.get("trace_backward", False)
 # GNN
 gnn_cfg = cfg["gnn"]
 path_model = gnn_cfg["path_model"]
+homogeneous = gnn_cfg.get("homogeneous", False)
 random_seed = gnn_cfg.get("random_seed", 0)
 
 torch.manual_seed(random_seed)
@@ -102,32 +104,39 @@ def process_outcome(p: Graph) -> bool:
     Returns:
         float: The predicted value.
     """
-    data, _, _, _, _, _ = build_hetero_data(
-        graph=p,
-        node_num_keys=metadata.node_num_keys,
-        node_cat_keys=metadata.node_cat_keys,
-        object_type_col=ocel.object_type_column,
-        event_activity_col=ocel.event_activity,
-        viewpoint=metadata.viewpoint,
-        normalize=metadata.normalized,
-        one_hot_encoding=metadata.one_hot_encoding,
-        add_reverse_edges=metadata.add_reverse_edges,
-    )
-
-    data = data.to(device)
-
     try:
-        # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
-        batch_dict = {
-            node_type: torch.zeros(
-                data[node_type].num_nodes if data[node_type].num_nodes else 0,
+        data, _, _, _, _, _ = build_hetero_data(
+            graph=p,
+            node_num_keys=metadata.node_num_keys,
+            node_cat_keys=metadata.node_cat_keys,
+            object_type_col=ocel.object_type_column,
+            event_activity_col=ocel.event_activity,
+            viewpoint=metadata.viewpoint,
+            normalize=metadata.normalized,
+            one_hot_encoding=metadata.one_hot_encoding,
+            add_reverse_edges=metadata.add_reverse_edges,
+        )
+
+        data = data.to(device)
+
+        if homogeneous:
+            data = data.to_homogeneous()
+            batch = torch.zeros(
+                data.num_nodes if data.num_nodes else 0,
                 dtype=torch.long,
                 device=device,
             )
-            for node_type in metadata.node_types
-        }
-        out = model(data.x_dict, data.edge_index_dict, batch_dict)
-
+            out = model(data.x, data.edge_index, batch)
+        else:
+            batch_dict = {
+                node_type: torch.zeros(
+                    data[node_type].num_nodes if data[node_type].num_nodes else 0,
+                    dtype=torch.long,
+                    device=device,
+                )
+                for node_type in metadata.node_types
+            }
+            out = model(data.x_dict, data.edge_index_dict, batch_dict)
     except Exception as e:
         print(f"Error occurred while processing graph: {e}")
         print(data)
@@ -195,19 +204,24 @@ visualize_process_execution(
 
 counterfactual_label = not process_outcome(target_process_execution)
 
-target_explanation, feat_label_dict, node_label_dict = generate_explanation(
-    G=target_process_execution,
-    metadata=metadata,
-    model=model,
-    object_type_col=ocel.object_type_column,
-    event_activity_col=ocel.event_activity,
-    verbose=True,
+target_explanation, hetero_data, feat_label_dict, node_label_dict = (
+    generate_explanation(
+        G=target_process_execution,
+        metadata=metadata,
+        model=model,
+        object_type_col=ocel.object_type_column,
+        event_activity_col=ocel.event_activity,
+        homogeneous=homogeneous,
+        verbose=True,
+    )
 )
 
 nodes_ordered = [
     n["label"]
     for n in get_nodes_by_importance(
-        explanation=target_explanation, node_label_dict=node_label_dict
+        explanation=target_explanation,
+        node_label_dict=node_label_dict,
+        hetero_data=hetero_data if homogeneous else None,
     )
     if n["importance"] >= node_importance_threshold
 ]
@@ -217,9 +231,10 @@ attr_ordered = {
     ]
     for node_type, features in get_feature_labels_by_importance(
         explanation=target_explanation,
-        feat_label_dict=feat_label_dict,
+        feat_label_dict=metadata.feat_label_dict,
         node_cat_keys=metadata.node_cat_keys,
         one_hot_encoding=metadata.one_hot_encoding,
+        hetero_data=hetero_data if homogeneous else None,
     ).items()
 }
 

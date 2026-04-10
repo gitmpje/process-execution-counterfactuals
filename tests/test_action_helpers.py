@@ -33,24 +33,12 @@ class DummyExplanation:
 
     def __init__(self, data: Dict[str, dict]):
         # data maps node_type -> dict with potentially 'node_mask'
-        self._data = data
-        self.node_types = list(data.keys())
-
-    def __getitem__(self, key):
-        return self._data.get(key)
-
-    def get_node_store(self, node_type):
-        # Return a dict-like object with key 'x' as required by the utility.
-        mask = self._data.get(node_type, {})
-        mask_tensor = mask.get("node_mask")
-        if mask_tensor is None:
-            num_feats = 0
-        else:
-            if mask_tensor.dim() == 1:
-                num_feats = mask_tensor.size(0)
-            else:
-                num_feats = mask_tensor.size(-1)
-        return {"x": zeros((1, num_feats))}
+        for node_type, node_data in data.items():
+            mask_tensor = node_data.get("node_mask")
+            if mask_tensor is not None:
+                self[node_type].node_mask = mask_tensor
+                num_feats = 1 if mask_tensor.dim() == 1 else mask_tensor.size(-1)
+                self[node_type].x = zeros((1, num_feats))
 
 
 # ---------------------------------------------------------------------------

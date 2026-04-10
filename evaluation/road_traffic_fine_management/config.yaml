@@ -17,6 +17,7 @@ process_execution:
 gnn:
   path_model: "data/model-pe.pth"
   num_layers: 1
+  batch_size: 10
   dropout: 0.1
   n_epochs: 100
   start_patience: 25

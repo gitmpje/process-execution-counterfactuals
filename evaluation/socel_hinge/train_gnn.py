@@ -25,6 +25,7 @@ path_metadata = dataset_cfg["path_metadata"]
 gnn_cfg = cfg["gnn"]
 path_model = gnn_cfg["path_model"]
 num_layers = gnn_cfg["num_layers"]
+batch_size = gnn_cfg["batch_size"]
 dropout = gnn_cfg["dropout"]
 n_epochs = gnn_cfg["n_epochs"]
 start_patience = gnn_cfg["start_patience"]
@@ -32,7 +33,6 @@ learning_rate = gnn_cfg["learning_rate"]
 
 # %% Create train/validate/test dataset for graph-level training
 device = "cuda" if torch.cuda.is_available() else "cpu"
-batch_size = 10
 
 dataset = torch.load(path_dataset, weights_only=False)
 

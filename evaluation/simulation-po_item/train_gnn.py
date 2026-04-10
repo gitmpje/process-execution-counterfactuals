@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
+from gnn.gat_graph_level import GATGraphLevel, GATConvTrainerGraphLevel
 from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
@@ -31,7 +32,9 @@ path_metadata = dataset_cfg["path_metadata"]
 # GNN
 gnn_cfg = cfg["gnn"]
 path_model = gnn_cfg["path_model"]
+homogeneous = gnn_cfg.get("homogeneous", False)
 num_layers = gnn_cfg["num_layers"]
+batch_size = gnn_cfg["batch_size"]
 dropout = gnn_cfg["dropout"]
 n_epochs = gnn_cfg["n_epochs"]
 start_patience = gnn_cfg["start_patience"]
@@ -42,7 +45,6 @@ torch.manual_seed(random_seed)
 
 # %% Create train/validate/test dataset for graph-level training
 device = "cuda" if torch.cuda.is_available() else "cpu"
-batch_size = 10
 
 dataset = torch.load(path_dataset, weights_only=False)
 
@@ -51,8 +53,15 @@ with open(path_metadata, "r") as f:
     metadata_dict = json.load(f)
 metadata = Metadata.from_dict(metadata_dict)
 
+if homogeneous:
+    _dataset = []
+    for data in dataset:
+        _data = data.to_homogeneous()
+        _data.y = data.y
+        _dataset.append(_data)
+    dataset = _dataset
+
 labels = [data.y for data in dataset]
-class_weights = torch.tensor([len(labels) / (len(labels) - sum(labels)), 1.0])
 train_idx, test_idx = train_test_split(
     list(range(len(dataset))),
     test_size=0.1,
@@ -76,21 +85,36 @@ val_loader = DataLoader(val_ds, batch_size=batch_size)
 test_loader = DataLoader(test_ds, batch_size=batch_size)
 
 # %% Define and train model
-model = HANGraphLevel(
-    in_channels=-1,
-    out_channels=2,
-    num_layers=num_layers,
-    dropout=dropout,
-    viewpoint=metadata.viewpoint,
-    metadata=[metadata.node_types, metadata.edge_types],
-)
-trainer = HANConvTrainerGraphLevel(
-    model=model,
-    viewpoint=metadata.viewpoint,
-    device=device,
-    criterion=torch.nn.CrossEntropyLoss(),  # weight=class_weights
-    output_type="binary",
-)
+if homogeneous:
+    model = GATGraphLevel(
+        in_channels=-1,
+        out_channels=2,
+        num_layers=num_layers,
+        dropout=dropout,
+    )
+    trainer = GATConvTrainerGraphLevel(
+        model=model,
+        device=device,
+        criterion=torch.nn.CrossEntropyLoss(),
+        output_type="binary",
+    )
+else:
+    model = HANGraphLevel(
+        in_channels=-1,
+        out_channels=2,
+        num_layers=num_layers,
+        dropout=dropout,
+        viewpoint=metadata.viewpoint,
+        metadata=[metadata.node_types, metadata.edge_types],
+    )
+    trainer = HANConvTrainerGraphLevel(
+        model=model,
+        viewpoint=metadata.viewpoint,
+        device=device,
+        criterion=torch.nn.CrossEntropyLoss(),
+        output_type="binary",
+    )
+
 trainer.train(
     train_loader,
     val_loader,

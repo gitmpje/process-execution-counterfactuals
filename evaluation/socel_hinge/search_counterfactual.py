@@ -148,7 +148,7 @@ target_process_execution = deepcopy(
 
 counterfactual_label = not process_outcome(target_process_execution)
 
-target_explanation, feat_label_dict, node_label_dict = generate_explanation(
+target_explanation, hetero_data, feat_label_dict, node_label_dict = generate_explanation(
     G=target_process_execution,
     metadata=metadata,
     model=model,

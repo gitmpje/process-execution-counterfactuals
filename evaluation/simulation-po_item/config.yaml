@@ -25,6 +25,8 @@ process_execution:
 
 gnn:
   path_model: "data/$SCENARIO_PREFIX-model-pe.pth"
+  homogeneous: True
+  batch_size: 10
   num_layers: 2
   dropout: 0.1
   n_epochs: 100

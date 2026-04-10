@@ -4,7 +4,8 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from networkx import Graph
 from torch import Tensor
-from torch_geometric.explain import HeteroExplanation
+from torch_geometric.data import HeteroData
+from torch_geometric.explain import Explanation, HeteroExplanation
 
 from tree_search.action import (
     EventNodeDeletion,
@@ -30,64 +31,138 @@ def _extract_attr(node_data: Any) -> Dict:
 
 
 def get_nodes_by_importance(
-    explanation: HeteroExplanation, node_label_dict: Dict[str, List[str]], top_k=None
+    explanation: Explanation | HeteroExplanation,
+    node_label_dict: Dict[str, List[str]],
+    top_k=None,
+    hetero_data: HeteroData = None,
 ) -> List[Dict]:
     """Return a list of nodes ordered by importance (descending).
 
     Each entry is a dict with keys: `node_type`, `node_index`, `label`, `importance`.
+
+    For a homogeneous ``Explanation``, nodes are mapped back to their original
+    hetero node types using ``hetero_data.to_homogeneous().node_type``, so
+    ``node_type`` in each result reflects the original type (e.g. ``"PO"``,
+    ``"item"``, ``"EVENT"``) and ``node_index`` is the index within that type.
+
+    Args:
+        explanation:     A PyG ``Explanation`` (homogeneous) or ``HeteroExplanation``.
+        node_label_dict: Maps original hetero node-type name → list of
+                         human-readable node labels.  Pass the original hetero
+                         dict from ``build_hetero_data`` for both paths.
+        top_k:           If set, return only the top-k most important nodes
+                         across all types.
+        hetero_data:     [Homogeneous only] The original ``HeteroData`` object
+                         (before ``to_homogeneous()``).  Required when
+                         ``explanation`` is a homogeneous ``Explanation``.
     """
     results = []
-    for node_type in explanation.node_types:
-        info = explanation[node_type]
-        if info is None:
-            continue
-        mask = info.get("node_mask")
-        if mask is None:
-            continue
-        if not isinstance(mask, Tensor):
-            continue
 
-        # Reduce per-feature masks to a scalar per node by averaging features
-        if mask.dim() > 1 and mask.size(-1) > 1:
-            scalar = mask.mean(dim=-1)
-        else:
-            scalar = mask.squeeze(-1) if mask.dim() > 1 else mask
+    if isinstance(explanation, HeteroExplanation):
+        # --- heterogeneous path (original logic) ---
+        for nt in explanation.node_types:
+            info = explanation[nt]
+            if info is None:
+                continue
+            mask = info.get("node_mask")
+            if mask is None or not isinstance(mask, Tensor):
+                continue
 
-        scalar = scalar.detach().cpu()
-        labels = node_label_dict.get(node_type, []) or [
-            f"{node_type}_{i}" for i in range(scalar.size(0))
-        ]
+            scalar = _reduce_node_mask(mask)
+            labels = node_label_dict.get(nt, []) or []
+            for i, v in enumerate(scalar.tolist()):
+                results.append(
+                    {
+                        "node_type": nt,
+                        "node_index": i,
+                        "label": labels[i] if i < len(labels) else f"{nt}_{i}",
+                        "importance": float(v),
+                    }
+                )
 
-        for i, v in enumerate(scalar.tolist()):
-            lbl = labels[i] if i < len(labels) else f"{node_type}_{i}"
-            results.append(
-                {
-                    "node_type": node_type,
-                    "node_index": i,
-                    "label": lbl,
-                    "importance": float(v),
-                }
+    else:
+        # --- homogeneous path ---
+        if hetero_data is None:
+            raise ValueError(
+                "hetero_data must be provided for homogeneous Explanation so that "
+                "nodes can be mapped back to their original node types."
             )
 
+        mask = explanation.get("node_mask")
+        if mask is None or not isinstance(mask, Tensor):
+            return results
+
+        homo_data = hetero_data.to_homogeneous()
+        orig_node_types = hetero_data.node_types  # str list, index = type int
+        node_type_tensor = homo_data.node_type  # shape [num_nodes]
+
+        scalar = _reduce_node_mask(mask)  # shape [num_nodes]
+
+        for type_idx, nt in enumerate(orig_node_types):
+            node_mask_idx = (node_type_tensor == type_idx).nonzero(as_tuple=True)[0]
+            if node_mask_idx.numel() == 0:
+                continue
+
+            labels = node_label_dict.get(nt, []) or []
+            for i, global_idx in enumerate(node_mask_idx.tolist()):
+                results.append(
+                    {
+                        "node_type": nt,
+                        "node_index": i,
+                        "label": labels[i] if i < len(labels) else f"{nt}_{i}",
+                        "importance": float(scalar[global_idx].item()),
+                    }
+                )
+
     results_sorted = sorted(results, key=lambda x: x["importance"], reverse=True)
-    if top_k is not None:
-        return results_sorted[:top_k]
-    return results_sorted
+    return results_sorted[:top_k] if top_k is not None else results_sorted
+
+
+def _reduce_node_mask(mask: Tensor) -> Tensor:
+    """Reduce a node mask to a scalar importance per node by averaging features."""
+    if mask.dim() > 1 and mask.size(-1) > 1:
+        return mask.mean(dim=-1).detach().cpu()
+    return (mask.squeeze(-1) if mask.dim() > 1 else mask).detach().cpu()
 
 
 def get_feature_labels_by_importance(
-    explanation: HeteroExplanation,
+    explanation: Explanation | HeteroExplanation,
     feat_label_dict: Dict[str, List[str]],
     node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]] = None,
     one_hot_encoding: bool = False,
     top_k=None,
+    hetero_data: HeteroData = None,
 ) -> Dict[str, List]:
     """Return per-node-type feature labels ordered by importance.
 
     For each node type, features are aggregated across nodes (mean) and
-    returned as a list of dicts with keys: `feature`, `importance`.
+    returned as a list of dicts with keys: ``feature``, ``importance``.
+
+    For a homogeneous ``Explanation``, importances are mapped back to the
+    original hetero node types using ``hetero_data.to_homogeneous().node_type``,
+    so the returned dict has the same keys as the original ``feat_label_dict``
+    (e.g. ``{'PO': [...], 'item': [...], 'EVENT': [...]}``) rather than a
+    flat ``"node"`` key.
+
+    Args:
+        explanation:      A PyG ``Explanation`` (homogeneous) or ``HeteroExplanation``.
+        feat_label_dict:  Maps original hetero node-type name → list of feature
+                          names.  Pass the original hetero dict from
+                          ``build_hetero_data`` for both hetero and homogeneous
+                          explanations.
+        node_cat_keys:    Optional categorical-feature metadata used when
+                          ``one_hot_encoding=True``.
+        one_hot_encoding: If ``True``, group one-hot expanded features back to
+                          their base category and average their importances.
+        top_k:            If set, return only the top-k features per node type.
+        hetero_data:      [Homogeneous only] The original ``HeteroData`` object
+                          (before ``to_homogeneous()``).  Required when
+                          ``explanation`` is a homogeneous ``Explanation`` so
+                          that the flat node/feature indices can be mapped back
+                          to their original node types.
     """
     out = {}
+
     category_labels = (
         {
             f"{k}[{label}]": k
@@ -100,49 +175,109 @@ def get_feature_labels_by_importance(
         else {}
     )
 
-    for node_type in explanation.node_types:
-        node_expl = explanation[node_type]
-        if node_expl is None:
-            continue
-        mask = node_expl.get("node_mask")
-        if mask is None or not isinstance(mask, Tensor):
-            continue
+    if isinstance(explanation, HeteroExplanation):
+        # --- heterogeneous path (original logic) ---
+        node_types = explanation.node_types
 
-        # Expect mask shape [num_nodes, num_features] for per-feature importances
-        num_feats = explanation.get_node_store(node_type)["x"].size(1)
+        def get_mask_and_x(nt):
+            node_expl = explanation[nt]
+            if node_expl is None:
+                return None, None
+            return node_expl.get("node_mask"), explanation.get_node_store(nt).get("x")
+
+        def get_feat_labels(nt, size):
+            return feat_label_dict.get(nt, []) or [f"feat_{i}" for i in range(size)]
+
+        for nt in node_types:
+            mask, x = get_mask_and_x(nt)
+            if mask is None or not isinstance(mask, Tensor) or x is None:
+                continue
+
+            num_feats = x.size(1)
+            if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
+                continue
+
+            per_feat = mask.mean(dim=0).detach().cpu()
+            feat_labels = get_feat_labels(nt, per_feat.size(0))
+            out[nt] = _make_pairs(
+                per_feat, feat_labels, category_labels, one_hot_encoding, top_k
+            )
+
+    else:
+        # --- homogeneous path ---
+        if hetero_data is None:
+            raise ValueError(
+                "hetero_data must be provided for homogeneous Explanation so that "
+                "feature importances can be mapped back to the original node types."
+            )
+
+        mask = explanation.get("node_mask")
+        x = explanation.get("x")
+        if mask is None or not isinstance(mask, Tensor) or x is None:
+            return out
+
+        num_feats = x.size(1)
         if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
-            # No per-feature importance available for this node type
-            continue
+            return out
 
-        # Aggregate across nodes -> per-feature importance
-        per_feat = mask.mean(dim=0).detach().cpu()
-        feat_labels = feat_label_dict.get(node_type, []) or [
-            f"feat_{i}" for i in range(per_feat.size(0))
-        ]
+        homo_data = hetero_data.to_homogeneous()
+        orig_node_types = hetero_data.node_types  # str list, index = type int
+        node_type_tensor = homo_data.node_type  # shape [num_nodes]
 
-        if one_hot_encoding:
-            # group feature importances by base category extracted from label
-            # e.g. 'ocel:activity[Register Customer Order]' -> 'ocel:activity'
-            category_vals: Dict[str, List[float]] = {}
-            for i, v in enumerate(per_feat.tolist()):
-                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
-                base = category_labels[fname] if fname in category_labels else fname
-                category_vals.setdefault(base, []).append(v)
+        # Average mask over nodes, but only for rows belonging to each type,
+        # and only over that type's own feature columns.
+        for type_idx, nt in enumerate(orig_node_types):
+            node_store = hetero_data[nt]
+            if not hasattr(node_store, "x") or node_store.x is None:
+                continue
 
-            pairs = [
-                {"feature": cat, "importance": float(sum(vals) / len(vals))}
-                for cat, vals in category_vals.items()
+            nt_num_feats = node_store.x.size(1)
+            # Row indices in the homogeneous graph that belong to this type.
+            node_mask_idx = (node_type_tensor == type_idx).nonzero(as_tuple=True)[0]
+            if node_mask_idx.numel() == 0:
+                continue
+
+            # Slice rows for this type, then only the columns it owns.
+            per_feat = mask[node_mask_idx, :nt_num_feats].mean(dim=0).detach().cpu()
+            feat_labels = feat_label_dict.get(nt, []) or [
+                f"feat_{i}" for i in range(nt_num_feats)
             ]
-        else:
-            pairs = []
-            for i, v in enumerate(per_feat.tolist()):
-                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
-                pairs.append({"feature": fname, "importance": float(v)})
-
-        pairs_sorted = sorted(pairs, key=lambda x: x["importance"], reverse=True)
-        out[node_type] = pairs_sorted[:top_k] if top_k is not None else pairs_sorted
+            out[nt] = _make_pairs(
+                per_feat, feat_labels, category_labels, one_hot_encoding, top_k
+            )
 
     return out
+
+
+def _make_pairs(
+    per_feat: Tensor,
+    feat_labels: List[str],
+    category_labels: Dict[str, str],
+    one_hot_encoding: bool,
+    top_k,
+) -> List[Dict]:
+    """Turn a per-feature importance vector into a sorted list of dicts."""
+    if one_hot_encoding:
+        category_vals: Dict[str, List[float]] = {}
+        for i, v in enumerate(per_feat.tolist()):
+            fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+            base = category_labels.get(fname, fname)
+            category_vals.setdefault(base, []).append(v)
+        pairs = [
+            {"feature": cat, "importance": float(sum(vals) / len(vals))}
+            for cat, vals in category_vals.items()
+        ]
+    else:
+        pairs = [
+            {
+                "feature": feat_labels[i] if i < len(feat_labels) else f"feat_{i}",
+                "importance": float(v),
+            }
+            for i, v in enumerate(per_feat.tolist())
+        ]
+
+    pairs_sorted = sorted(pairs, key=lambda x: x["importance"], reverse=True)
+    return pairs_sorted[:top_k] if top_k is not None else pairs_sorted
 
 
 def build_object_substitution_actions(
