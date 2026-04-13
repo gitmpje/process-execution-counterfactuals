@@ -41,3 +41,13 @@ counterfactual:
   max_change_size: 5
   node_importance_threshold: 0.01
   attr_importance_threshold: 0.1
+
+counterfactual_graphcfe:
+  vae_type: graphVAE
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 200
+  learning_rate: 0.01

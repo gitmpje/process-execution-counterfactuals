@@ -23,12 +23,18 @@ from tree_search.action_helpers import (
 from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
 
+from gnn.graph_cfe import _compute_proximity, GraphCFEDatasetStats
 from gnn.hetero_graph_data import build_hetero_data
 from gnn.utils import Metadata
 from gnn.explanation import generate_explanation
 from process_execution.process_execution import extract_process_execution
 
-from utils import _replace_scenario_prefix, visualize_process_execution
+from utils import (
+    _replace_scenario_prefix,
+    get_dense_representation,
+    to_homogeneous,
+    visualize_process_execution,
+)
 
 ### Configuration ###
 config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -36,7 +42,7 @@ with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
 # Replace $SCENARIO_PREFIX tokens in config
-SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX")
+SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX", "scenario_01")
 if SCENARIO_PREFIX is not None:
     cfg = _replace_scenario_prefix(cfg, SCENARIO_PREFIX)
 
@@ -44,6 +50,7 @@ if SCENARIO_PREFIX is not None:
 dataset_cfg = cfg["dataset"]
 path_ocel = dataset_cfg["path_ocel"]
 path_labels = dataset_cfg["path_labels"]
+path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
 normalize = dataset_cfg.get("normalize", False)
 one_hot_encoding = dataset_cfg.get("one_hot_encoding", False)
@@ -410,9 +417,36 @@ with open("data/cf_results.txt", "a") as f:
         f.write("No counterfactual found\n")
     f.write("\n")
 
+# %% Compute proximity
+dataset = torch.load(path_dataset, weights_only=False)
+
+homogeneous_dataset, labels = to_homogeneous(dataset)
+stats = GraphCFEDatasetStats.from_dataset(homogeneous_dataset, labels)
+
 if sorted_action_sets:
+    features_orig, adj_orig, _ = get_dense_representation(
+        target_process_execution,
+        metadata,
+        stats,
+        ocel.object_type_column,
+        ocel.event_activity,
+        device,
+    )
+
     _, changes = sorted_action_sets[-1].apply_changes(target_process_execution)
     visualize_process_execution(
         target_process_execution, f"data/{SCENARIO_PREFIX}-cf_pe.svg"
     )
+    features_cf, adj_cf, _ = get_dense_representation(
+        target_process_execution,
+        metadata,
+        stats,
+        ocel.object_type_column,
+        ocel.event_activity,
+        device,
+    )
     sorted_action_sets[-1].undo_changes(target_process_execution, changes)
+
+    proximity = _compute_proximity(features_orig, adj_orig, features_cf, adj_cf)
+
+    print(proximity)
