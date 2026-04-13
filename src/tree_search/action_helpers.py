@@ -10,6 +10,7 @@ from torch_geometric.explain import Explanation, HeteroExplanation
 from tree_search.action import (
     EventNodeDeletion,
     EventNodeInsertion,
+    EventNodeMove,
     EventNodeSubstitution,
     NodeAttributeCategorical,
     NodeAttributeNumeric,
@@ -579,6 +580,43 @@ def build_object_insertion_actions(
     return actions
 
 
+def build_event_move_actions(
+    target_event_nodes: Iterable[Tuple[Any, Any]],
+    candidate_event_nodes: Iterable[Tuple[Any, Any]],
+    check: Callable[[Dict, Dict], bool] = lambda a, b: True,
+) -> List[EventNodeMove]:
+    """Construct EventNodeMove actions from target event nodes.
+
+    - target_event_nodes: iterable of (node_id, node_data) for events to move.
+    - candidate_event_nodes: iterable of (node_id, node_data) for potential target events.
+    - check: callable(target_attr, candidate_attr) -> bool to filter valid target events.
+    """
+    actions: List[EventNodeMove] = []
+
+    candidate_list = list(candidate_event_nodes)
+    target_map = dict(target_event_nodes)
+
+    for node_id, node_data in target_map.items():
+        attr = _extract_attr(node_data)
+        if attr.get("type", "") != "EVENT":
+            continue
+
+        target_events = []
+        for candidate_id, candidate_data in candidate_list:
+            if candidate_id == node_id:
+                continue
+            candidate_attr = _extract_attr(candidate_data)
+            if candidate_attr.get("type", "") != "EVENT":
+                continue
+            if not check(attr, candidate_attr):
+                continue
+            target_events.append(candidate_id)
+
+        actions.append(EventNodeMove(event_id=node_id, target_events=target_events))
+
+    return actions
+
+
 def build_node_deletion_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     nodes_order: Iterable[Any] = None,
@@ -818,6 +856,7 @@ __all__ = [
     "build_event_substitution_actions",
     "build_event_insertion_actions",
     "build_object_insertion_actions",
+    "build_event_move_actions",
     "build_node_deletion_actions",
     "build_node_attribute_actions",
     "construct_attribute_spec_dict",

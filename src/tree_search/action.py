@@ -612,6 +612,154 @@ class EventNodeSubstitution(Action):
         return p
 
 
+class EventNodeMove(Action):
+    """
+    Action representing possible event node moving in a process execution.
+    Attributes:
+        event_id (str): identifier of the event to substitute.
+        target_events (List[str]):
+            An iterable of lists of target events (node IDs) after which to move the event.
+    """
+
+    def __init__(
+        self,
+        *args,
+        event_id: str,
+        target_events: List[str],
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.event_id = event_id
+        self.target_events = target_events
+
+    def __repr__(self) -> str:
+        return f"Event {self.event_id} with {len(self.target_events)} target options"
+
+    def action_space_size(self):
+        return len(self.target_events)
+
+    def action_space(
+        self,
+        current_change_value: Optional[str] = None,
+        max_change_size_delta: int | float = 1,
+    ) -> Iterable[Tuple[str, dict]]:
+        """
+        Generate possible target options for the event node action.
+        Args:
+            current_change_value (Optional[str]): Current change value.
+            max_change_size_delta (int | float): Upper bound on the delta of the change size.
+        Yields:
+            Iterable[str]: target event after which to move the event.
+        """
+
+        for target_node in self.target_events:
+            if self.change_size(target_node=target_node) <= max_change_size_delta:
+                yield target_node
+
+    def apply_change(
+        self,
+        p: ProcessExecution,
+        target_event_id: str,
+    ) -> dict:
+        """
+        Apply the event move and return a small snapshot of the graph
+        state that is necessary to undo the operation.
+
+        Moves self.event_id to follow target_event_id by updating DF relations.
+        """
+
+        # snapshot state so undo can restore exactly
+        record: dict = {
+            "nodes": {},
+            "original_edges": [],
+            "added_edges": [],
+        }
+
+        record["nodes"][self.event_id] = deepcopy(p.nodes[self.event_id])
+
+        record["original_edges"] = [
+            (u, v, k, deepcopy(d))
+            for u, v, k, d in p.edges(keys=True, data=True)
+            if u in {self.event_id, target_event_id}
+            or v in {self.event_id, target_event_id}
+        ]
+
+        if not p.has_node(target_event_id):
+            raise Exception(f"Event node {target_event_id} does not exist")
+
+        # Collect DF edges for the two nodes
+        def df_edges(node):
+            incoming = [
+                (u, v, k, d)
+                for u, v, k, d in p.in_edges(node, keys=True, data=True)
+                if d.get("attr", {}).get("type") == "DF"
+            ]
+            outgoing = [
+                (u, v, k, d)
+                for u, v, k, d in p.out_edges(node, keys=True, data=True)
+                if d.get("attr", {}).get("type") == "DF"
+            ]
+            return incoming, outgoing
+
+        self_in, self_out = df_edges(self.event_id)
+        _, target_out = df_edges(target_event_id)
+
+        # remove original DF edges for the moved node and target node
+        for u, v, k, _ in self_in + self_out + target_out:
+            if p.has_edge(u, v, key=k):
+                p.remove_edge(u, v, key=k)
+
+        # reconnect self.event_id's original neighbors around its old position
+        for u, _, k, d in self_in:
+            for _, v, _, _ in self_out:
+                p.add_edge(u, v, key=k, **{"attr": d.get("attr", {}).copy()})
+
+                record["added_edges"].append((u, v, k))
+
+        # insert self.event_id after target_event_id
+        p.add_edge(target_event_id, self.event_id, attr={"type": "DF"})
+        record["added_edges"].append((target_event_id, self.event_id, 0))
+
+        # connect self.event_id to target's old successors
+        for _, v, _, d in target_out:
+            p.add_edge(self.event_id, v, attr=d.get("attr", {}).copy())
+            record["added_edges"].append((self.event_id, v, 0))
+
+        # swap timestamps/epoch if present in node attr dicts
+        for key in ["ocel:timestamp", "epoch"]:
+            v1 = p.nodes[self.event_id].get("attr", {}).get(key)
+            v2 = p.nodes[target_event_id].get("attr", {}).get(key)
+            if v1 is not None or v2 is not None:
+                p.nodes[self.event_id]["attr"][key] = v2
+
+        return record
+
+    def change_size(self, target_event_id: str = None):
+        if target_event_id:
+            return 1
+
+    def undo_change(self, p: ProcessExecution, record: Any) -> ProcessExecution:
+        # Restore nodes as they were at snapshot time.
+        for nid, attrs in record.get("nodes", {}).items():
+            if not p.has_node(nid):
+                p.add_node(nid, **attrs)
+            else:
+                p.nodes()[nid].clear()
+                p.nodes()[nid].update(attrs)
+
+        # Remove added edges.
+        for u, v, k in record.get("added_edges", []):
+            if p.has_edge(u, v, key=k):
+                p.remove_edge(u, v, key=k)
+
+        # Restore snapshot edges.
+        for u, v, k, d in record.get("original_edges", []):
+            if not p.has_edge(u, v, key=k):
+                p.add_edge(u, v, key=k, **d)
+
+        return p
+
+
 class NodeDeletion(Action):
     """
     Action representing possible node deletions from a process execution.

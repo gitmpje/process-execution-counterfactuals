@@ -9,8 +9,10 @@ from tree_search.action import (
     EventNodeSubstitution,
     EventNodeDeletion,
     ObjectNodeDeletion,
+    EventNodeMove,
     NodeDeletion,
 )
+from tree_search.action_helpers import build_event_move_actions
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +160,65 @@ def test_event_node_substitution_apply_and_undo():
     assert p.nodes["e2"]["attr"]["epoch"] == 2
 
 
+def test_event_node_move_apply_and_undo():
+    p = ProcessExecution()
+    # Set up two events and neighbors with DF edges
+    p.add_node("e1", attr={"type": "EVENT", "ocel:timestamp": "t1", "epoch": 1})
+    p.add_node("e2", attr={"type": "EVENT", "ocel:timestamp": "t2", "epoch": 2})
+    p.add_node("e0", attr={"type": "EVENT"})
+    p.add_node("e3", attr={"type": "EVENT"})
+
+    p.add_edge("e0", "e1", attr={"type": "DF"})
+    p.add_edge("e1", "e2", attr={"type": "DF"})
+    p.add_edge("e2", "e3", attr={"type": "DF"})
+
+    action = EventNodeMove(
+        event_id="e1",
+        target_events=["e2"],
+    )
+
+    record = action.apply_change(p, "e2")
+
+    # DF edges should be changed
+    expected_after = {
+        ("e0", "e2"),
+        ("e2", "e1"),
+        ("e1", "e3"),
+    }
+    actual_after = {
+        (u, v)
+        for u, v, d in p.edges(data=True)
+        if d.get("attr", {}).get("type") == "DF"
+    }
+    assert actual_after == expected_after
+
+    # timestamps and epoch should be changed
+    assert p.nodes["e1"]["attr"]["ocel:timestamp"] == "t2"
+    assert p.nodes["e2"]["attr"]["ocel:timestamp"] == "t2"
+    assert p.nodes["e1"]["attr"]["epoch"] == 2
+    assert p.nodes["e2"]["attr"]["epoch"] == 2
+
+    # undo should restore original
+    action.undo_change(p, record)
+
+    expected_before = {
+        ("e0", "e1"),
+        ("e1", "e2"),
+        ("e2", "e3"),
+    }
+    actual_before = {
+        (u, v)
+        for u, v, d in p.edges(data=True)
+        if d.get("attr", {}).get("type") == "DF"
+    }
+
+    assert actual_before == expected_before
+    assert p.nodes["e1"]["attr"]["ocel:timestamp"] == "t1"
+    assert p.nodes["e2"]["attr"]["ocel:timestamp"] == "t2"
+    assert p.nodes["e1"]["attr"]["epoch"] == 1
+    assert p.nodes["e2"]["attr"]["epoch"] == 2
+
+
 def test_event_node_deletion_apply():
     p = ProcessExecution()
     p.add_node("e1", attr={"type": "EVENT"})
@@ -183,3 +244,27 @@ def test_object_node_deletion_apply():
     action = ObjectNodeDeletion(deletion_options=[["o1"]])
     action.apply_change(p, ["o1"])
     assert not p.has_node("o1")
+
+
+def test_build_event_move_actions():
+    target_event_nodes = [
+        ("e1", {"attr": {"type": "EVENT", "ocel:activity": "A"}}),
+        ("e2", {"attr": {"type": "EVENT", "ocel:activity": "B"}}),
+    ]
+    candidate_event_nodes = [
+        ("e0", {"attr": {"type": "EVENT", "ocel:activity": "A"}}),
+        ("e1", {"attr": {"type": "EVENT", "ocel:activity": "A"}}),
+        ("e3", {"attr": {"type": "EVENT", "ocel:activity": "C"}}),
+    ]
+
+    actions = build_event_move_actions(
+        target_event_nodes,
+        candidate_event_nodes,
+        check=lambda target_attr, candidate_attr: True,
+    )
+
+    assert len(actions) == 2
+    action_map = {action.event_id: action for action in actions}
+    assert isinstance(action_map["e1"], EventNodeMove)
+    assert set(action_map["e1"].target_events) == {"e0", "e3"}
+    assert action_map["e2"].target_events == ["e0", "e1", "e3"]

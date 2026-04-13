@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from torch import tensor, zeros
+from torch_geometric.explain import HeteroExplanation
 from typing import Dict
 
 from tree_search.action_helpers import (
@@ -28,10 +29,11 @@ from tree_search.action import (
 from process_execution.process_execution import ProcessExecution
 
 
-class DummyExplanation:
+class DummyExplanation(HeteroExplanation):
     """Minimal stand-in for torch_geometric.explain.HeteroExplanation."""
 
     def __init__(self, data: Dict[str, dict]):
+        super().__init__()
         # data maps node_type -> dict with potentially 'node_mask'
         for node_type, node_data in data.items():
             mask_tensor = node_data.get("node_mask")
@@ -87,6 +89,7 @@ def test_get_feature_labels_per_category_and_topk():
     out = get_feature_labels_by_importance(
         expl, feat_labels, node_cat_keys, one_hot_encoding=True, top_k=1
     )
+    print(out)
     assert out["t"][0]["feature"] == "foo"
     assert len(out["t"]) == 1
 
