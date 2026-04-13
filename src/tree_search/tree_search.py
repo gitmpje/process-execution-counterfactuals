@@ -49,6 +49,8 @@ class TreeSearchCounterFactual:
         self.log_level = log_level
         self.log_file = log_file
 
+        self.count_explored = 0
+
         self.logger = self._configure_logger()
 
     def maximum_number_of_actions(
@@ -137,7 +139,7 @@ class TreeSearchCounterFactual:
         self,
         actions_to_explore: List[Tuple[ActionSet, List[Action]]],
         process_execution: ProcessExecution,
-        change_size=1,
+        change_size: int = 1,
     ) -> List | None:
         """
         Recursively enumerate possible actions to find counterfactuals.
@@ -166,6 +168,7 @@ class TreeSearchCounterFactual:
             explored, selected = self.explore_actions(
                 action_set, actions, process_execution, change_size
             )
+            self.count_explored += len(explored)
 
             # Collect distinct next actions
             self.logger.debug("Explored %s actions", len(explored))

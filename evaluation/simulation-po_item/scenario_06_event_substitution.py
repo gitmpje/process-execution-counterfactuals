@@ -42,10 +42,10 @@ from base import (
 )
 
 CONFIG = dict(
-    n_pos=100,
+    n_pos=200,
     items_per_po=2,
     simtime=400,
-    anomaly_prob=0.3,
+    anomaly_prob=0.5,
     output_prefix="scenario_06",
     seed=606,
     send_reminder_mandatory=True,
@@ -129,7 +129,7 @@ if __name__ == "__main__":
     else:
         print(f"Warning: expected OCEL file not found: {ocel_path}")
 
-    label_path = f"{CONFIG['output_prefix']}_labels.json"
+    label_path = f"{CONFIG['output_prefix']}-labels.json"
     with open(label_path, "w") as f:
         json.dump(
             {

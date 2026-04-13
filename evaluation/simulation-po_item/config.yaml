@@ -1,3 +1,11 @@
+run_scenarios:
+  simulate: False
+  scripts:
+    - "build_dataset.py"
+    - "train_gnn.py"
+    - "search_counterfactual.py"
+    - "search_counterfactual_CLEAR.py"
+
 dataset:
   path_ocel: "data/$SCENARIO_PREFIX.json"
   path_labels: "data/$SCENARIO_PREFIX-labels.json"
@@ -29,10 +37,10 @@ gnn:
   batch_size: 10
   num_layers: 2
   dropout: 0.1
-  n_epochs: 100
+  n_epochs: 200
   start_patience: 25
   learning_rate: 0.01
-  random_seed: 42
+  random_seed: 0
 
 counterfactual:
   viewpoint_event_label: True
@@ -43,11 +51,11 @@ counterfactual:
   attr_importance_threshold: 0.1
 
 counterfactual_graphcfe:
-  vae_type: graphVAE
+  vae_type: "graphVAE"
   dim_h: 64
   dim_z: 32
   dropout: 0.1
   disable_u: False
   batch_size: 10
-  n_epochs: 200
+  n_epochs: 300
   learning_rate: 0.01

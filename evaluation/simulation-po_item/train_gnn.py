@@ -9,6 +9,7 @@ from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader
 
 from gnn.gat_graph_level import GATGraphLevel, GATConvTrainerGraphLevel
+from gnn.hetero_graph_data import to_homogeneous_data
 from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
@@ -56,7 +57,13 @@ metadata = Metadata.from_dict(metadata_dict)
 if homogeneous:
     _dataset = []
     for data in dataset:
-        _data = data.to_homogeneous()
+        _data = to_homogeneous_data(
+            data,
+            metadata.node_num_keys,
+            metadata.node_num_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
         _data.y = data.y
         _dataset.append(_data)
     dataset = _dataset

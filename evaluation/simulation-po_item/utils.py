@@ -7,11 +7,11 @@ from torch_geometric.data import Data, HeteroData
 
 from typing import List, Tuple
 
-from gnn.graph_cfe import (
+from gnn.clear_graph_cfe import (
     GraphCFEDatasetStats,
     _to_dense,
 )
-from gnn.utils import build_hetero_data, Metadata
+from gnn.utils import build_hetero_data, Metadata, to_homogeneous_data
 
 
 def _replace_scenario_prefix(item: dict | list | str, scenario_prefix: str):
@@ -140,11 +140,20 @@ def train_graphcfe_model(
 
 def to_homogeneous(
     dataset: List[HeteroData],
+    metadata: Metadata,
 ) -> Tuple[List[Data], GraphCFEDatasetStats]:
     homogeneous_dataset = []
     labels = []
     for data in dataset:
-        homogeneous_dataset.append(data.to_homogeneous())
+        homogeneous_dataset.append(
+            to_homogeneous_data(
+                data,
+                metadata.node_num_keys,
+                metadata.node_num_keys,
+                metadata.node_types,
+                metadata.one_hot_encoding,
+            )
+        )
         labels.append(torch.tensor([data.y], dtype=torch.long))
 
     return homogeneous_dataset, labels
@@ -169,7 +178,13 @@ def get_dense_representation(
         one_hot_encoding=metadata.one_hot_encoding,
         add_reverse_edges=metadata.add_reverse_edges,
     )
-    homogeneous_data = hetero_data.to_homogeneous()
+    homogeneous_data = to_homogeneous_data(
+        hetero_data,
+        metadata.node_num_keys,
+        metadata.node_num_keys,
+        metadata.node_types,
+        metadata.one_hot_encoding,
+    )
 
     return _to_dense(homogeneous_data, stats.max_num_nodes, stats.x_dim, device)
 

@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from networkx import Graph
 from pandas import DataFrame
 from torch import save as tsave
-from torch_geometric.data import HeteroData
+from torch_geometric.data import Data, HeteroData
 from typing import Callable, Dict, List, Optional, Tuple, Any
 
 from process_execution.process_execution import extract_process_execution
-from gnn.hetero_graph_data import build_hetero_data
+from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 
 
 @dataclass
@@ -243,10 +243,13 @@ def build_process_execution_dataset(
     add_reverse_edges: bool = False,
     normalize: bool = False,
     one_hot_encoding: bool = False,
+    homogeneous: bool = False,
     path_pe_dataset: Optional[str] = None,
-) -> Tuple[List[HeteroData], Metadata]:
+) -> Tuple[List[Data | HeteroData], Metadata]:
     """
-    Build a HeteroData dataset from process executions in an OCEL graph.
+    Build a dataset from process executions in an OCEL graph.
+    The dataset may be returned as heterogeneous HeteroData objects or as
+    homogeneous Data objects when `homogeneous=True`.
 
     This function extracts process executions from events in an OCEL graph,
     converts each to a HeteroData graph, and compiles them into a dataset
@@ -269,10 +272,12 @@ def build_process_execution_dataset(
         event_activity_col: Column name for event activity attribute (default: "ocel:activity").
         add_reverse_edges: Whether to add reverse edges in the graph.
         normalize: Whether to normalize numeric features.
+        one_hot_encoding: Whether categorical attributes are one-hot encoded.
+        homogeneous: Whether to convert the dataset to homogeneous Data objects.
 
     Returns:
         Tuple of (dataset, metadata) where:
-            - dataset: List of HeteroData objects, one per process execution.
+            - dataset: List of HeteroData or homogeneous Data objects, one per process execution.
             - metadata: Metadata object containing dataset information (node types, edge types,
               feature labels, etc.).
 
@@ -336,6 +341,18 @@ def build_process_execution_dataset(
         raise RuntimeError("No complete process executions found to build dataset")
 
     # Save dataset if path provided
+    if homogeneous:
+        dataset = [
+            to_homogeneous_data(
+                hetero_data,
+                node_num_keys=node_num_keys,
+                node_cat_keys=node_cat_keys,
+                node_types=sorted(node_types_set),
+                one_hot_encoding=one_hot_encoding,
+            )
+            for hetero_data in dataset
+        ]
+
     if path_pe_dataset:
         tsave(dataset, path_pe_dataset)
 

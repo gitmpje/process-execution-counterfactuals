@@ -101,14 +101,11 @@ def test_action_size_objective_and_apply(simple_process_execution, numeric_actio
     a = ActionSet()
     # no changes initially
     assert a.action_size() == 0
-    assert a.objective_value() == 0
 
     # set a change value and apply it to the process
     a.set_change_value(numeric_action, 1)
     assert a.get_change_value(numeric_action) == 1
     assert a.action_size() == numeric_action.change_size(1)
-    # objective counts nonzero modifications
-    assert a.objective_value() == 1
 
     p = simple_process_execution
     p_after, rec = a.apply_changes(p)

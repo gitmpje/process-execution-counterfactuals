@@ -7,6 +7,7 @@ from process_execution.process_execution import ProcessExecution
 from tree_search.action import (
     Action,
     EventNodeDeletion,
+    EventNodeMove,
     EventNodeSubstitution,
     EventNodeInsertion,
     ObjectNodeInsertion,
@@ -44,6 +45,7 @@ class ActionSet:
         self,
         node_attributes_modification: Dict[NodeAttributeNumeric, Any] = None,
         event_insertion: Dict[EventNodeInsertion, bool] = None,
+        event_move: Dict[EventNodeMove, str | None] = None,
         event_substitution: Dict[EventNodeSubstitution, Tuple[str, dict] | None] = None,
         object_insertion: Dict[ObjectNodeInsertion, bool] = None,
         object_substitution: Dict[
@@ -57,12 +59,14 @@ class ActionSet:
         Args:
             node_attributes_modification: Dictionary of node attribute modifications.
             event_insertion: Dictionary of event insertions.
+            event_move: Dictionary of event moves.
             event_substitution: Dictionary of event substitutions.
             object_insertion: Dictionary of object insertions.
             object_substitution: Dictionary of object substitutions.
             node_deletion: Dictionary of node deletions.
         """
         self.node_attributes_modification = node_attributes_modification or {}
+        self.event_move = event_move or {}
         self.event_substitution = event_substitution or {}
         self.object_substitution = object_substitution or {}
         self.event_insertion = event_insertion or {}
@@ -89,6 +93,7 @@ class ActionSet:
             "node_attributes_modification": make_json_safe(
                 self.node_attributes_modification
             ),
+            "event_move": make_json_safe(self.event_move),
             "event_substitution": make_json_safe(event_substitution),
             "object_substitution": make_json_safe(object_substitution),
             "event_insertion": make_json_safe(event_insertion),
@@ -107,6 +112,7 @@ class ActionSet:
             node_attributes_modification={
                 k: v for k, v in self.node_attributes_modification.items()
             },
+            event_move={k: v for k, v in self.event_move.items()},
             event_substitution={k: v for k, v in self.event_substitution.items()},
             object_substitution={k: v for k, v in self.object_substitution.items()},
             node_deletion={k: v for k, v in self.node_deletion.items()},
@@ -123,6 +129,7 @@ class ActionSet:
             return NotImplemented
         return (
             self.node_attributes_modification == other.node_attributes_modification
+            and self.event_move == other.event_move
             and self.event_substitution == other.event_substitution
             and self.object_substitution == other.object_substitution
             and self.event_insertion == other.event_insertion
@@ -138,6 +145,10 @@ class ActionSet:
         """
         # Node attribute modifications
         for action, undo_info in record.get("node_attributes", {}).items():
+            action.undo_change(p, undo_info)
+
+        # Event moves
+        for action, undo_info in record.get("event_move", {}).items():
             action.undo_change(p, undo_info)
 
         # Event substitutions
@@ -170,6 +181,7 @@ class ActionSet:
             return NotImplemented
         return (
             self.node_attributes_modification != other.node_attributes_modification
+            or self.event_move != other.event_move
             or self.event_substitution != other.event_substitution
             or self.object_substitution != other.object_substitution
             or self.event_insertion != other.event_insertion
@@ -187,6 +199,14 @@ class ActionSet:
             for action in self.node_attributes_modification.keys()
             if action is not exclude_action
         }
+
+        # Event substitutions
+        for action, target_event_id in self.event_move.items():
+            if action is exclude_action:
+                continue
+            nodes.add(action.event_id)
+            if target_event_id:
+                nodes.add(target_event_id)
 
         # Event substitutions
         for action, subst in self.event_substitution.items():
@@ -243,6 +263,11 @@ class ActionSet:
         if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
             candidate_nodes.add(action.node_id)
 
+        elif isinstance(action, EventNodeMove):
+            candidate_nodes.add(action.event_id)
+            if change_value:
+                candidate_nodes.add(change_value)
+
         elif isinstance(action, EventNodeSubstitution):
             candidate_nodes.add(action.event_id)
             if change_value:
@@ -279,6 +304,8 @@ class ActionSet:
         """
         if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
             return self.node_attributes_modification.get(action)
+        elif isinstance(action, EventNodeMove):
+            return self.event_move.get(action)
         elif isinstance(action, EventNodeSubstitution):
             return self.event_substitution.get(action)
         elif isinstance(action, ObjectNodeSubstitution):
@@ -301,6 +328,8 @@ class ActionSet:
         """
         if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
             self.node_attributes_modification[action] = value
+        elif isinstance(action, EventNodeMove):
+            self.event_move[action] = value
         elif isinstance(action, EventNodeSubstitution):
             self.event_substitution[action] = value
         elif isinstance(action, ObjectNodeSubstitution):
@@ -324,6 +353,10 @@ class ActionSet:
             action.change_size(change_value=change_value)
             for action, change_value in self.node_attributes_modification.items()
         )
+        event_move_size = sum(
+            action.change_size(target_event_id=target_event_id)
+            for action, target_event_id in self.event_move.items()
+        )
         event_substitution_size = sum(
             action.change_size(subst_node=subst_event)
             for action, subst_event in self.event_substitution.items()
@@ -346,38 +379,12 @@ class ActionSet:
         )
         return (
             node_attributes_modification_size
+            + event_move_size
             + event_substitution_size
             + object_substitution_size
             + event_insertion_size
             + object_insertion_size
             + deletion_size
-        )
-
-    def objective_value(self) -> int:
-        """
-        Calculate the objective value of the action, defined as the total number changes.
-        Returns:
-            int: The objective value of the action.
-        """
-        substitutions = [
-            (k.object_id, v[0]) for k, v in self.object_substitution.items() if v
-        ] + [(k.event_id, v[0]) for k, v in self.event_substitution.items() if v]
-
-        insertion = len([k for k, v in self.event_insertion.items() if v]) + len(
-            [k for k, v in self.object_insertion.items() if v]
-        )
-
-        return (
-            len(self.node_deletion)
-            + insertion
-            + len(
-                [
-                    node_id
-                    for node_id, subst_node_id in substitutions
-                    if node_id != subst_node_id
-                ]
-            )
-            + len([k for k, v in self.node_attributes_modification.items() if v != 0])
         )
 
     def apply_changes(
@@ -397,6 +404,7 @@ class ActionSet:
         # record structure holds per-action undo data
         record: dict = {
             "node_attributes": {},
+            "event_move": {},
             "event_substitution": {},
             "object_substitution": {},
             "event_insertion": {},
@@ -406,6 +414,10 @@ class ActionSet:
 
         for action, value in self.node_attributes_modification.items():
             record["node_attributes"][action] = action.apply_change(p, value)
+
+        for action, target_event_id in self.event_move.items():
+            if target_event_id:
+                record["event_move"][action] = action.apply_change(p, target_event_id)
 
         for action, substitution in self.event_substitution.items():
             if substitution:

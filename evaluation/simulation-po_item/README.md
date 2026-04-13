@@ -31,8 +31,10 @@ python run_all_scenarios.py
 # Run specific scenarios only
 python run_all_scenarios.py --scenarios 1 3 7
 
-# Write output to a dedicated folder
-python run_all_scenarios.py --outdir ../data/raw
+# Other options:
+--outdir ../data/raw # write output to a dedicated folder
+--skip-simulation # skip running the simulation and use existing data set
+--config-file config.yaml # YAML file in which the scripts to run are defined
 
 # Run a single scenario directly
 python scenario_01_object_attr_change.py

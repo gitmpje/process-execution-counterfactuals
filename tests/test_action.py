@@ -57,7 +57,6 @@ def test_categorical_action_sizes():
 def make_simple_object_graph():
     p = ProcessExecution()
     p.add_node("o1", attr={"type": "OBJECT"})
-    p.add_node("o2", attr={"type": "OBJECT"})
     p.add_node("e1", attr={"type": "EVENT"})
     p.add_edge("e1", "o1", attr={"type": "E2O"})
     return p
@@ -74,7 +73,7 @@ def test_object_substitution_apply_and_cost():
     )
     before_edges = list(p.in_edges("o1"))
     assert before_edges
-    action.apply_change(p, ("o2", {"attr": {}}))
+    action.apply_change(p, ("o2", {"attr": {"type": "OBJECT"}}))
     assert not p.has_node("o1")
     assert p.has_edge("e1", "o2")
     # cost should be calculable without error (should not raise)
@@ -82,6 +81,27 @@ def test_object_substitution_apply_and_cost():
         _ = action.change_size(subst_node=("o2", {"attr": {"type": "OBJECT"}}))
     except NotImplementedError:
         pytest.skip("change_size not implemented for given types")
+
+
+def test_object_substitution_apply_and_undo():
+    p = make_simple_object_graph()
+    action = ObjectNodeSubstitution(
+        object_id="o1",
+        substitution_objects=[("o2", {"attr": {"type": "OBJECT"}})],
+        event_ids=["e1"],
+        object_data={"attr": {"type": "OBJECT", "foo": 1}},
+        discretized_attributes=None,
+    )
+    before_edges = list(p.in_edges("o1"))
+    assert before_edges
+    record = action.apply_change(p, ("o2", {"attr": {"type": "OBJECT"}}))
+    assert not p.has_node("o1")
+    assert p.has_edge("e1", "o2")
+
+    # undo should restore original
+    action.undo_change(p, record)
+    assert not p.has_node("o2")
+    assert p.has_edge("e1", "o1")
 
 
 # ---------------------------------------------------------------------------

@@ -10,13 +10,16 @@ from networkx import Graph
 from random import seed
 from types import SimpleNamespace
 
-from gnn.graph_cfe import (
+from gnn.clear_graph_cfe import (
     GraphCFE,
     generate_graphcfe_counterfactual_with_evaluation,
     GraphCFEDatasetStats,
+    _compute_proximity,
+    _hetero_to_homogeneous_data,
+    _to_dense,
 )
 
-from gnn.hetero_graph_data import build_hetero_data
+from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 from gnn.utils import Metadata
 from process_execution.process_execution import extract_process_execution
 
@@ -100,7 +103,15 @@ dataset = torch.load(path_dataset, weights_only=False)
 homogeneous_dataset = []
 labels = []
 for data in dataset:
-    homogeneous_dataset.append(data.to_homogeneous())
+    homogeneous_dataset.append(
+        to_homogeneous_data(
+            data,
+            metadata.node_num_keys,
+            metadata.node_num_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
+    )
     labels.append(torch.tensor([data.y], dtype=torch.long))
 
 stats = GraphCFEDatasetStats.from_dataset(homogeneous_dataset, labels)
@@ -131,7 +142,13 @@ def process_outcome(p: Graph) -> bool:
         data = data.to(device)
 
         if homogeneous:
-            data = data.to_homogeneous()
+            data = to_homogeneous_data(
+                data,
+                metadata.node_num_keys,
+                metadata.node_num_keys,
+                metadata.node_types,
+                metadata.one_hot_encoding,
+            )
             batch = torch.zeros(
                 data.num_nodes if data.num_nodes else 0,
                 dtype=torch.long,
@@ -191,24 +208,26 @@ with open(path_labels, "r") as f:
 if "viewpoint_event_labels" not in labels_data:
     raise KeyError(f"Missing 'viewpoint_event_labels' key in {path_labels}")
 
-viewpoint_event_ids = []
-for event_id, event_label in labels_data["viewpoint_event_labels"].items():
-    if event_label == viewpoint_event_label:
-        process_execution = extract_process_execution(
-            ocel_nx,
-            event_id,
-            object_types=process_execution_object_types,
-            target_activity_type=process_execution_target_activity,
-            backward=trace_backward,
-        )
-        if process_outcome(process_execution) == viewpoint_event_label:
-            viewpoint_event_ids.append(event_id)
+if counterfactual_cfg.get("viewpoint_event_id"):
+    viewpoint_event_ids = [counterfactual_cfg.get("viewpoint_event_id")]
+else:
+    viewpoint_event_ids = []
+    for event_id, event_label in labels_data["viewpoint_event_labels"].items():
+        if event_label == viewpoint_event_label:
+            process_execution = extract_process_execution(
+                ocel_nx,
+                event_id,
+                object_types=process_execution_object_types,
+                target_activity_type=process_execution_target_activity,
+                backward=trace_backward,
+            )
+            if process_outcome(process_execution) == viewpoint_event_label:
+                viewpoint_event_ids.append(event_id)
 
 if not viewpoint_event_ids:
     raise ValueError(
         f"No event found in {path_labels} with actual and predicted label {viewpoint_event_label}"
     )
-viewpoint_event_id = viewpoint_event_ids[0]
 
 # %% Select graph to explain
 # Extract target process execution
@@ -239,20 +258,52 @@ for event_id in viewpoint_event_ids:
     data_dict[event_id] = (data, node_label_dict)
 
 # %% GraphCFE
-hetero_data = data_dict[viewpoint_event_id][0]
+print("counterfactual_label =", not viewpoint_event_label)
 
-print("counterfactual_label =", viewpoint_event_label)
+results = []
+for viewpoint_event_id, record in data_dict.items():
+    hetero_data = record[0]
 
-edits, evaluation = generate_graphcfe_counterfactual_with_evaluation(
-    graphcfe_model=graphcfe_model,
-    graph=hetero_data,
-    target_class=int(viewpoint_event_label),
-    # adj_threshold=0.0,
-    # feat_threshold=0.0,
-    dataset_stats=stats,
-    graph_matching=False,
-    evaluation_model=model,
-)
+    features_cf, adj_cf, edits, proximity_metrics = (
+        generate_graphcfe_counterfactual_with_evaluation(
+            graphcfe_model=graphcfe_model,
+            graph=hetero_data,
+            metadata=metadata,
+            target_class=int(not viewpoint_event_label),
+            adj_threshold=0.001,
+            feat_threshold=0.001,
+            dataset_stats=stats,
+            graph_matching=True,
+            evaluation_model=model,
+        )
+    )
 
-print(edits)
-print(evaluation)
+    data = _hetero_to_homogeneous_data(hetero_data, metadata)
+    features_orig, adj_orig, _ = _to_dense(
+        data, stats.max_num_nodes, stats.x_dim, device
+    )
+
+    proximity_metrics_all = {}
+    for event_id, record_i in data_dict.items():
+        data_i = _hetero_to_homogeneous_data(record_i[0], metadata)
+        features_i, adj_i, _ = _to_dense(
+            data_i, stats.max_num_nodes, stats.x_dim, device
+        )
+        proximity_metrics_all[event_id] = _compute_proximity(
+            features_cf, adj_cf, features_i, adj_i
+        )
+
+    results.append(
+        {
+            "viewpoint_event_id": viewpoint_event_id,
+            "edits": str(edits),
+            "proximity_metrics": proximity_metrics,
+            "proximity_metrics_all": proximity_metrics_all,
+        }
+    )
+
+run_id = os.getenv("RUN_ID")
+with open(
+    f"results/{SCENARIO_PREFIX}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
+) as f:
+    json.dump(results, f)

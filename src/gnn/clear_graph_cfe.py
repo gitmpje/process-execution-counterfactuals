@@ -44,6 +44,8 @@ from torch_geometric.data import Data, HeteroData
 from torch_geometric.nn import DenseGCNConv, DenseGraphConv
 from torch_geometric.utils import to_dense_adj
 
+from gnn.hetero_graph_data import to_homogeneous_data
+from gnn.utils import Metadata
 
 # ---------------------------------------------------------------------------
 # Graph-edit representation (same pattern as other CF methods in codebase)
@@ -156,9 +158,15 @@ class GraphCFEDatasetStats:
 # ---------------------------------------------------------------------------
 
 
-def _hetero_to_homogeneous_data(graph: HeteroData | Data) -> Data:
+def _hetero_to_homogeneous_data(graph: HeteroData | Data, metadata: Metadata) -> Data:
     if isinstance(graph, HeteroData):
-        return graph.to_homogeneous()
+        return to_homogeneous_data(
+            graph,
+            metadata.node_num_keys,
+            metadata.node_num_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
     return graph
 
 
@@ -247,7 +255,8 @@ def _compute_proximity(
     feat_orig: torch.Tensor,  # (n, x_dim)
     adj_orig: torch.Tensor,  # (n, n)  binary
     feat_cf: torch.Tensor,  # (n, x_dim)
-    adj_cf: torch.Tensor,  # (n, n)  raw sigmoid output
+    adj_cf: torch.Tensor,  # (n, n)  binary
+    adj_cf_prob: Optional[torch.Tensor] = None,  # (n, n)  raw sigmoid output
 ) -> dict:
     """
     Compute proximity metrics between original and counterfactual graphs.
@@ -262,12 +271,15 @@ def _compute_proximity(
     feat_orig : (n, x_dim) – original node features
     adj_orig : (n, n) – original adjacency (binary)
     feat_cf : (n, x_dim) – counterfactual node features
-    adj_cf : (n, n) – counterfactual adjacency (probabilistic output)
+    adj_cf : (n, n) – counterfactual adjacency (binary)
+    adj_cf_prob : (n, n) – counterfactual adjacency (probabilistic output), if not provided use adj_cf
 
     Returns
     -------
     dict with keys 'dist_x', 'dist_a', 'proximity'
     """
+    adj_cf_prob = adj_cf_prob if adj_cf_prob is not None else adj_cf
+
     # Feature distance: pairwise L2 distance
     n = feat_orig.shape[0]
     if n > 0:
@@ -280,22 +292,109 @@ def _compute_proximity(
         dist_x = torch.tensor(0.0, device=device)
 
     # Adjacency distance: binary cross entropy
-    dist_a = F.binary_cross_entropy(adj_cf.float(), adj_orig.float())
+    dist_a = F.binary_cross_entropy(adj_cf_prob.float(), adj_orig.float())
 
     # Proximity
     cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
-    cos_sim = cos(adj_orig, adj_cf)
+    cos_sim = cos(feat_orig, feat_cf)
     proximity_x = torch.mean(cos_sim)
 
-    proximity_a = (adj_orig == torch.bernoulli(adj_cf)).float().mean()
+    proximity_a = (adj_orig == adj_cf).float().mean()
 
     return {
         "dist_x": dist_x.item(),
         "dist_a": dist_a.item(),
-        "dist_score": (dist_x + dist_a).item(),
         "proximity_x": proximity_x.item(),
         "proximity_a": proximity_a.item(),
     }
+
+
+def _matched_diff_to_edits(
+    adj_orig: torch.Tensor,  # (N, N)
+    adj_cf: torch.Tensor,  # (N, N)  raw sigmoid output
+    feat_orig: torch.Tensor,  # (N, x_dim)
+    feat_cf: torch.Tensor,  # (N, x_dim)
+    adj_threshold: float = 0.5,
+    feat_threshold: float = 0.5,
+    graph_matching: bool = False,
+) -> List[GraphEdit]:
+    """
+    1. Restrict to the n_real real (non-padded) nodes plus any extra nodes
+       present in the reconstructed graph.
+    2. Binarise the reconstructed adjacency.
+    3. Run graph matching (Hungarian) to align G' node indices to G.
+    4. Diff the aligned matrices to produce GraphEdit objects.
+    """
+    # Use the maximum node size across original and reconstructed tensors so
+    # that insertions / deletions beyond the original n_real region are not
+    # ignored.
+    n = max(
+        adj_orig.size(0),
+        adj_orig.size(1),
+        adj_cf.size(0),
+        adj_cf.size(1),
+        feat_orig.size(0),
+        feat_cf.size(0),
+    )
+
+    def _pad_adj(matrix: torch.Tensor, size: int) -> torch.Tensor:
+        if matrix.size(0) == size and matrix.size(1) == size:
+            return matrix
+        return F.pad(
+            matrix,
+            (0, size - matrix.size(1), 0, size - matrix.size(0)),
+            value=0.0,
+        )
+
+    def _pad_feat(matrix: torch.Tensor, size: int) -> torch.Tensor:
+        if matrix.size(0) == size:
+            return matrix
+        return F.pad(matrix, (0, 0, 0, size - matrix.size(0)), value=0.0)
+
+    A = _pad_adj(adj_orig[:n, :n], n)
+    X = _pad_feat(feat_orig[:n], n)
+    Acf = _pad_adj(adj_cf[:n, :n], n)
+    Xcf = _pad_feat(feat_cf[:n], n)
+
+    A = (A > adj_threshold).float()
+    Acf = (Acf > adj_threshold).float()
+
+    # Graph matching: find permutation π s.t. Acf[π][:,π] ≈ A
+    if graph_matching:
+        perm = _match_nodes(A, X, Acf, Xcf)  # (n,)
+
+        A_cf_aligned = Acf[perm][:, perm]  # (n, n)
+        X_cf_aligned = Xcf[perm]  # (n, x_dim)
+    else:
+        A_cf_aligned = Acf
+        X_cf_aligned = Xcf
+
+    edits: List[GraphEdit] = []
+
+    # Edge additions
+    for i, j in (A_cf_aligned - A).clamp(min=0).nonzero(as_tuple=False).tolist():
+        if i != j:
+            edits.append(GraphEdit(edit_type="add_edge", src=i, dst=j))
+
+    # Edge removals
+    for i, j in (A - A_cf_aligned).clamp(min=0).nonzero(as_tuple=False).tolist():
+        if i != j:
+            edits.append(GraphEdit(edit_type="remove_edge", src=i, dst=j))
+
+    # Node-feature changes
+    diff = (X_cf_aligned - X).abs()
+    for node_idx, feat_idx in (diff > feat_threshold).nonzero(as_tuple=False).tolist():
+        edits.append(
+            GraphEdit(
+                edit_type="change_node_feat",
+                node_idx=int(node_idx),
+                feature_idx=int(feat_idx),
+                old_value=float(X[node_idx, feat_idx].item()),
+                new_value=float(X_cf_aligned[node_idx, feat_idx].item()),
+            )
+        )
+
+    return edits
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +453,7 @@ class GraphCFEExplainer:
     def explain(
         self,
         graph: HeteroData | Data,
+        metadata: Metadata,
         target_class: int,
         n_samples: int = 1,
     ) -> List[GraphEdit]:
@@ -373,7 +473,7 @@ class GraphCFEExplainer:
         List[GraphEdit] – ordered edits that transform ``graph`` into the
         counterfactual.  Apply them in sequence to reproduce G'.
         """
-        data = _hetero_to_homogeneous_data(graph)
+        data = _hetero_to_homogeneous_data(graph, metadata)
         stats = self.stats
         dev = self.device
 
@@ -396,15 +496,18 @@ class GraphCFEExplainer:
             for _ in range(n_samples):
                 output = self.model(features_orig, u, adj_orig, y_cf)
 
-                adj_cf = output["adj_reconst"]  # (1, N, N)
+                adj_cf_prob = output["adj_reconst"]  # (1, N, N)
+                adj_cf = torch.bernoulli(adj_cf_prob)
                 feat_cf = output["features_reconst"]  # (1, N, x_dim)
 
-                edits = self._matched_diff_to_edits(
+                edits = _matched_diff_to_edits(
                     adj_orig[0],
                     adj_cf[0],
                     features_orig[0],
                     feat_cf[0],
-                    n_real,
+                    self.adj_threshold,
+                    self.feat_threshold,
+                    self.graph_matching,
                 )
 
                 if len(edits) < best_count:
@@ -416,6 +519,7 @@ class GraphCFEExplainer:
     def explain_with_evaluation(
         self,
         graph: HeteroData | Data,
+        metadata: Metadata,
         target_class: int,
         n_samples: int = 1,
         evaluation_model: Optional[torch.nn.Module] = None,
@@ -448,7 +552,7 @@ class GraphCFEExplainer:
             - 'evaluation_valid': ``True`` if the selected counterfactual is
               predicted as ``target_class`` by ``evaluation_model``.
         """
-        data = _hetero_to_homogeneous_data(graph)
+        data = _hetero_to_homogeneous_data(graph, metadata)
         stats = self.stats
         dev = self.device
 
@@ -472,39 +576,48 @@ class GraphCFEExplainer:
             for _ in range(n_samples):
                 output = self.model(features_orig, u, adj_orig, y_cf)
 
-                adj_cf = output["adj_reconst"]  # (1, N, N)
+                adj_cf_prob = output["adj_reconst"]  # (1, N, N)
+                adj_cf = torch.bernoulli(adj_cf_prob)
                 feat_cf = output["features_reconst"]  # (1, N, x_dim)
 
-                edits = self._matched_diff_to_edits(
+                edits = _matched_diff_to_edits(
                     adj_orig[0],
                     adj_cf[0],
                     features_orig[0],
                     feat_cf[0],
-                    n_real,
+                    self.adj_threshold,
+                    self.feat_threshold,
+                    self.graph_matching,
                 )
 
                 if len(edits) < best_count:
                     best_count = len(edits)
                     best_edits = edits
+                    best_feat_cf = feat_cf
+                    best_adj_cf = adj_cf
                     # Compute proximity for this best candidate
                     best_proximity = _compute_proximity(
-                        features_orig[0, :n_real],
-                        adj_orig[0, :n_real, :n_real],
-                        feat_cf[0, :n_real],
-                        adj_cf[0, :n_real, :n_real],
+                        features_orig[0],
+                        adj_orig[0],
+                        feat_cf[0],
+                        adj_cf[0],
+                        adj_cf_prob[0],
                     )
 
                     if evaluation_model is not None:
                         evaluation_results = self._evaluate_candidate(
                             graph,
-                            feat_cf[0, :n_real],
-                            adj_cf[0, :n_real, :n_real],
+                            metadata,
+                            feat_cf[0],
+                            adj_cf[0],
                             evaluation_model,
                             target_class,
                         )
                         best_proximity.update(evaluation_results)
 
         return (
+            best_feat_cf,
+            best_adj_cf,
             best_edits if best_edits is not None else [],
             best_proximity if best_proximity is not None else {},
         )
@@ -516,6 +629,7 @@ class GraphCFEExplainer:
     def _evaluate_candidate(
         self,
         graph: HeteroData | Data,
+        metadata: Metadata,
         candidate_feat: torch.Tensor,
         candidate_adj: torch.Tensor,
         evaluation_model: torch.nn.Module,
@@ -524,7 +638,13 @@ class GraphCFEExplainer:
         """Evaluate the selected counterfactual candidate with a classifier."""
         # Convert to a homogeneous graph if needed, then override features and edges.
         if isinstance(graph, HeteroData):
-            eval_data = graph.to_homogeneous()
+            eval_data = to_homogeneous_data(
+                graph,
+                metadata.node_num_keys,
+                metadata.node_num_keys,
+                metadata.node_types,
+                metadata.one_hot_encoding,
+            )
         else:
             eval_data = graph.clone()
 
@@ -564,78 +684,6 @@ class GraphCFEExplainer:
             "evaluation_valid": prediction == target_class,
         }
 
-    def _matched_diff_to_edits(
-        self,
-        adj_orig: torch.Tensor,  # (N, N)
-        adj_cf: torch.Tensor,  # (N, N)  raw sigmoid output
-        feat_orig: torch.Tensor,  # (N, x_dim)
-        feat_cf: torch.Tensor,  # (N, x_dim)
-        n_real: int,
-    ) -> List[GraphEdit]:
-        """
-        1. Restrict to the n_real real (non-padded) nodes.
-        2. Binarise the reconstructed adjacency.
-        3. Run graph matching (Hungarian) to align G' node indices to G.
-        4. Diff the aligned matrices to produce GraphEdit objects.
-        """
-        # Restrict to real nodes and binarise
-        A = (adj_orig[:n_real, :n_real] > self.adj_threshold).float()
-        Xo = feat_orig[:n_real]  # (n, x_dim)
-        Acf = (adj_cf[:n_real, :n_real] > self.adj_threshold).float()
-        Xcf = feat_cf[:n_real]
-
-        # Graph matching: find permutation π s.t. Acf[π][:,π] ≈ A
-        if self.graph_matching:
-            perm = _match_nodes(A, Xo, Acf, Xcf)  # (n,)
-
-            A_cf_aligned = Acf[perm][:, perm]  # (n, n)
-            X_cf_aligned = Xcf[perm]  # (n, x_dim)
-        else:
-            A_cf_aligned = Acf
-            X_cf_aligned = Xcf
-
-        return self._diff_to_edits(A, A_cf_aligned, Xo, X_cf_aligned)
-
-    def _diff_to_edits(
-        self,
-        adj_orig: torch.Tensor,  # (n, n)  binary
-        adj_cf_aligned: torch.Tensor,  # (n, n)  binary, node-matched
-        feat_orig: torch.Tensor,  # (n, x_dim)
-        feat_cf_aligned: torch.Tensor,  # (n, x_dim)
-    ) -> List[GraphEdit]:
-        edits: List[GraphEdit] = []
-
-        # Edge additions
-        for i, j in (
-            (adj_cf_aligned - adj_orig).clamp(min=0).nonzero(as_tuple=False).tolist()
-        ):
-            if i != j:
-                edits.append(GraphEdit(edit_type="add_edge", src=i, dst=j))
-
-        # Edge removals
-        for i, j in (
-            (adj_orig - adj_cf_aligned).clamp(min=0).nonzero(as_tuple=False).tolist()
-        ):
-            if i != j:
-                edits.append(GraphEdit(edit_type="remove_edge", src=i, dst=j))
-
-        # Node-feature changes
-        diff = (feat_cf_aligned - feat_orig).abs()
-        for node_idx, feat_idx in (
-            (diff > self.feat_threshold).nonzero(as_tuple=False).tolist()
-        ):
-            edits.append(
-                GraphEdit(
-                    edit_type="change_node_feat",
-                    node_idx=int(node_idx),
-                    feature_idx=int(feat_idx),
-                    old_value=float(feat_orig[node_idx, feat_idx].item()),
-                    new_value=float(feat_cf_aligned[node_idx, feat_idx].item()),
-                )
-            )
-
-        return edits
-
 
 # ---------------------------------------------------------------------------
 # Functional entry-point  (mirrors other CF methods in the codebase)
@@ -645,6 +693,7 @@ class GraphCFEExplainer:
 def generate_graphcfe_counterfactual(
     graphcfe_model: torch.nn.Module,
     graph: HeteroData | Data,
+    metadata: Metadata,
     target_class: int,
     dataset_stats: GraphCFEDatasetStats,
     adj_threshold: float = 0.5,
@@ -701,12 +750,13 @@ def generate_graphcfe_counterfactual(
         disable_u=disable_u,
         graph_matching=graph_matching,
     )
-    return explainer.explain(graph, target_class, n_samples=n_samples)
+    return explainer.explain(graph, metadata, target_class, n_samples=n_samples)
 
 
 def generate_graphcfe_counterfactual_with_evaluation(
     graphcfe_model: torch.nn.Module,
     graph: HeteroData | Data,
+    metadata: Metadata,
     target_class: int,
     dataset_stats: GraphCFEDatasetStats,
     adj_threshold: float = 0.5,
@@ -757,6 +807,7 @@ def generate_graphcfe_counterfactual_with_evaluation(
     )
     return explainer.explain_with_evaluation(
         graph,
+        metadata,
         target_class,
         n_samples=n_samples,
         evaluation_model=evaluation_model,

@@ -8,7 +8,7 @@ from torch_geometric.explain import (
 )
 
 from gnn.utils import Metadata
-from gnn.hetero_graph_data import build_hetero_data
+from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 from tree_search.action_helpers import (
     get_nodes_by_importance,
     get_feature_labels_by_importance,
@@ -57,7 +57,13 @@ def generate_explanation(
     )
 
     if homogeneous:
-        data = hetero_data.to_homogeneous()
+        data = to_homogeneous_data(
+            hetero_data,
+            metadata.node_num_keys,
+            metadata.node_num_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
         batch = zeros(
             data.num_nodes if data.num_nodes else 0,
             dtype=long,
@@ -71,7 +77,11 @@ def generate_explanation(
     else:
         batch_dict = {
             node_type: zeros(
-                hetero_data[node_type].num_nodes, dtype=long, device=device
+                hetero_data[node_type].num_nodes
+                if hetero_data[node_type].num_nodes
+                else 0,
+                dtype=long,
+                device=device,
             )
             for node_type in metadata.node_types
         }
@@ -86,6 +96,7 @@ def generate_explanation(
             explanation,
             node_label_dict,
             top_k=20,
+            metadata=metadata if homogeneous else None,
             hetero_data=hetero_data if homogeneous else None,
         )
 
@@ -101,6 +112,7 @@ def generate_explanation(
             node_cat_keys=metadata.node_cat_keys,
             one_hot_encoding=metadata.one_hot_encoding,
             top_k=10,
+            metadata=metadata if homogeneous else None,
             hetero_data=hetero_data if homogeneous else None,
         )
         print("\nTop features by importance per node type:")

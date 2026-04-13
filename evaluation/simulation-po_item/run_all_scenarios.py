@@ -13,7 +13,9 @@ Usage
 Options
 -------
     --scenarios   Space-separated list of scenario numbers to run (default: all)
+    --config-file YAML file in which the scripts to run are defined (default: config.yaml)
     --outdir      Directory to write output files (default: current dir)
+    --run-id      Identifier for the run used as suffix for the result files from search_counterfactual (default: None)
 """
 
 import argparse
@@ -22,6 +24,9 @@ import os
 import subprocess
 import sys
 import time
+import yaml
+
+from typing import List
 
 SCENARIO_MODULES = {
     1: (
@@ -69,22 +74,29 @@ def parse_args():
         help="Scenario numbers to run (default: all)",
     )
     parser.add_argument(
+        "--config-file",
+        type=str,
+        default="config.yaml",
+        help="YAML file in which the scripts to run are defined (default: config.yaml)",
+    )
+    parser.add_argument(
         "--outdir",
         type=str,
         default="data/",
         help="Output directory for OCEL and label files (default: data/)",
     )
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Identifier for the run used as suffix for the result files from search_counterfactual (default: None)",
+    )
     return parser.parse_args()
 
 
-def run_scenario(number, outdir):
-    filename, description = SCENARIO_MODULES[number]
-    print(f"\n{'=' * 60}")
-    print(f"  Scenario {number:02d}: {description}")
-    print(f"{'=' * 60}")
+def run_scenario(number, outdir, script_path):
     t0 = time.time()
 
-    script_path = os.path.join(SIM_DIR, filename)
     os.makedirs(outdir, exist_ok=True)
 
     result = subprocess.run(
@@ -99,6 +111,7 @@ def run_scenario(number, outdir):
 
     print(f"  ✓ Simulation scenario {number:02d} completed in {elapsed:.1f}s")
 
+def run_scripts(number, script_path, scripts: List[str], run_id: str):
     # Use scenario CONFIG output_prefix for scripts.
     output_prefix = _read_scenario_output_prefix(script_path)
     print(f"  Using output_prefix='{output_prefix}'")
@@ -108,12 +121,9 @@ def run_scenario(number, outdir):
         **os.environ,
         "PYTHONPATH": SIM_DIR,
         "SCENARIO_PREFIX": output_prefix,
+        "RUN_ID": run_id,
     }
-    for pipeline_script in [
-        "build_dataset.py",
-        "train_gnn.py",
-        "search_counterfactual.py",
-    ]:
+    for pipeline_script in scripts:
         t0_step = time.time()
         print(f"  ---> Running {pipeline_script} for scenario {number}...")
         result = subprocess.run(
@@ -134,6 +144,11 @@ def main():
     total_start = time.time()
     failed = []
 
+    # Load configuration file
+    config_file = os.path.join(args.config_file)
+    with open(config_file) as f:
+        cfg_run = yaml.safe_load(f)["run_scenarios"]
+
     # Clear results file
     with open("data/cf_results.txt", "w") as f:
         f.write("")
@@ -143,7 +158,15 @@ def main():
             print(f"[WARN] Unknown scenario {number}, skipping.")
             continue
         try:
-            run_scenario(number, args.outdir)
+            filename, description = SCENARIO_MODULES[number]
+            print(f"\n{'=' * 60}")
+            print(f"  Scenario {number:02d}: {description}")
+            print(f"{'=' * 60}")
+
+            script_path = os.path.join(SIM_DIR, filename)
+            if cfg_run["simulate"]:
+                run_scenario(number, args.outdir, script_path)
+            run_scripts(number, script_path, cfg_run.get("scripts", []), args.run_id)
         except Exception as exc:
             print(f"[ERROR] Scenario {number} failed: {exc}")
             failed.append(number)

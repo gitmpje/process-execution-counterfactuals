@@ -357,11 +357,11 @@ class ObjectNodeSubstitution(Action):
         subst_object_attr = substitution_object[1]
 
         # snapshot nodes/edges involving the two object IDs before modification
-        record: dict = {"nodes": {}, "edges": [], "had_subst": False}
+        record: dict = {"nodes": {}, "edges": [], "nodes_added": []}
         for nid in (self.object_id, subst_object_id):
             if p.has_node(nid):
                 record["nodes"][nid] = p.nodes[nid].copy()
-        record["had_subst"] = p.has_node(subst_object_id)
+
         record["edges"] = [
             (u, v, k, d.copy())
             for u, v, k, d in p.edges(keys=True, data=True)
@@ -372,6 +372,7 @@ class ObjectNodeSubstitution(Action):
         # Add object node if not exists
         if not p.nodes.get(subst_object_id):
             p.add_node(subst_object_id, **subst_object_attr)
+            record["nodes_added"].append(nid)
 
         # Replace event-object relationships
         remove_edges = []
@@ -430,9 +431,7 @@ class ObjectNodeSubstitution(Action):
             if not p.has_edge(u, v, key=k):
                 p.add_edge(u, v, key=k, **d)
         # remove substitution node if it was created by the change
-        subst_id = list(set(record.get("nodes", {}).keys()) - {self.object_id})
-        if subst_id and not record.get("had_subst"):
-            nid = subst_id[0]
+        for nid in record.get("nodes_added", []):
             if p.has_node(nid):
                 try:
                     p.remove_node(nid)
@@ -652,9 +651,12 @@ class EventNodeMove(Action):
             Iterable[str]: target event after which to move the event.
         """
 
-        for target_node in self.target_events:
-            if self.change_size(target_node=target_node) <= max_change_size_delta:
-                yield target_node
+        for target_event_id in self.target_events:
+            if (
+                self.change_size(target_event_id=target_event_id)
+                <= max_change_size_delta
+            ):
+                yield target_event_id
 
     def apply_change(
         self,

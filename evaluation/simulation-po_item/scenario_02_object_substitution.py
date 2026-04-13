@@ -33,7 +33,7 @@ from simpn.simulator import SimToken
 from base import build_model, run_simulation, make_po_tokens, make_item_tokens
 
 CONFIG = dict(
-    n_pos=100,
+    n_pos=200,
     items_per_po=2,
     simtime=400,
     anomaly_prob=0.3,

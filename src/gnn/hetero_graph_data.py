@@ -3,8 +3,8 @@ import torch
 
 from collections import defaultdict
 from networkx import Graph
-from torch_geometric.data import HeteroData
-from typing import Dict, Tuple, Set
+from torch_geometric.data import Data, HeteroData
+from typing import Any, Dict, List, Tuple, Set
 
 
 def construct_graph_dict(
@@ -30,7 +30,9 @@ def construct_graph_dict(
 
     # Collect nodes per type
     node_id_to_type = {}
-    type_to_nodes = defaultdict(list)
+    type_to_nodes = {
+        t: [] for t in event_object_types
+    }
     for node, attr in graph.nodes(data="attr"):
         t = None
         if attr.get("type") == node_type_object:
@@ -52,6 +54,7 @@ def construct_graph_dict(
         nodes = type_to_nodes.get(t, [])
         type_to_idx[t] = {n: i for i, n in enumerate(nodes)}
         feat_values = []
+        feat_labels = []
         node_labels = []
         for n in nodes:
             attr = graph.nodes[n].get("attr") or {}
@@ -86,7 +89,7 @@ def construct_graph_dict(
                 else:
                     node_feats.append(v)
 
-            feat_labels = num_keys.copy()
+            feat_labels.extend(num_keys.copy())
 
             # Encode categorical attributes by their index in the provided unique-values list
             cat_info = node_cat_keys.get(node_type, {}).get(t, {})
@@ -167,8 +170,8 @@ def construct_graph_dict(
 
     return (
         graph_dict,
-        type_to_nodes.keys(),
-        edge_dict.keys(),
+        list(type_to_nodes.keys()),
+        list(edge_dict.keys()),
         feat_label_dict,
         node_label_dict,
     )
@@ -207,8 +210,11 @@ def build_hetero_data(
         raise ValueError(f"No nodes of viewpoint type {viewpoint} occur in the graph")
 
     for t in node_types:
-        hetero_data[t].x = torch.tensor(graph_dict[t], dtype=torch.float32).reshape(
-            len(graph_dict[t]), -1
+        values = graph_dict[t]
+        if not values:
+            continue
+        hetero_data[t].x = torch.tensor(values, dtype=torch.float32).reshape(
+            len(values), -1
         )
 
     hetero_data[viewpoint].y = torch.tensor(graph_dict["y"]).reshape(-1, 1)
@@ -229,3 +235,132 @@ def build_hetero_data(
         feat_label_dict,
         node_label_dict,
     )
+
+
+def _feature_dimension_for_type(
+    type_name: str,
+    node_num_keys: Dict[str, Dict[str, Dict[str, Tuple[float, float]]]],
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+    one_hot_encoding: bool = False,
+) -> int:
+    if type_name in node_num_keys["OBJECT"]:
+        node_type_key = "OBJECT"
+    elif type_name in node_num_keys["EVENT"]:
+        node_type_key = "EVENT"
+    else:
+        raise ValueError(
+            f"Cannot determine node kind for feature dimension of type '{type_name}'"
+        )
+
+    num_spec = node_num_keys[node_type_key].get(type_name, {})
+    if isinstance(num_spec, dict):
+        num_keys = list(num_spec.keys())
+    else:
+        num_keys = list(num_spec)
+
+    dim = len(num_keys)
+    cat_info = node_cat_keys.get(node_type_key, {}).get(type_name, {})
+    if one_hot_encoding:
+        dim += sum(len(unique_vals) for unique_vals in cat_info.values())
+    else:
+        dim += len(cat_info)
+
+    return dim if dim > 0 else 1
+
+
+def _pad_node_features_to_width(
+    hetero_data: HeteroData,
+    node_types: List[str],
+    feature_dim: int,
+) -> None:
+    for node_type in node_types:
+        if node_type not in hetero_data.node_types:
+            hetero_data[node_type].x = torch.zeros(
+                (0, feature_dim), dtype=torch.float32
+            )
+            continue
+
+        x = hetero_data[node_type].x
+        if x.size(1) < feature_dim:
+            pad = x.new_zeros((x.size(0), feature_dim - x.size(1)))
+            hetero_data[node_type].x = torch.cat([x, pad], dim=1)
+
+
+def to_homogeneous_data(
+    hetero_data: HeteroData,
+    node_num_keys: Dict[str, Dict[str, Dict[str, Tuple[float, float]]]],
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+    node_types: List[str] | None = None,
+    one_hot_encoding: bool = False,
+) -> Data:
+    all_node_types = (
+        list(node_types)
+        if node_types is not None
+        else list(hetero_data.node_types)
+    )
+    if not all_node_types:
+        raise ValueError("No node types provided for homogeneous conversion")
+
+    feature_dim = max(
+        _feature_dimension_for_type(
+            type_name=node_type,
+            node_num_keys=node_num_keys,
+            node_cat_keys=node_cat_keys,
+            one_hot_encoding=one_hot_encoding,
+        )
+        for node_type in all_node_types
+    )
+
+    _pad_node_features_to_width(hetero_data, all_node_types, feature_dim)
+
+    data = hetero_data.to_homogeneous()
+    if hasattr(hetero_data, "y"):
+        data.y = hetero_data.y
+
+    if not hasattr(data, "edge_index") or data.edge_index is None:
+        data.edge_index = torch.empty((2, 0), dtype=torch.int64)
+
+    return data
+
+
+def build_data(
+    graph: Graph,
+    node_num_keys: dict,
+    node_cat_keys: dict,
+    object_type_col: str,
+    event_activity_col: str,
+    viewpoint: str,
+    node_y_mapping: Dict[str, float] = None,
+    add_reverse_edges: bool = False,
+    path_dataset: str = None,
+    normalize: bool = False,
+    one_hot_encoding: bool = False,
+    node_types: List[str] | None = None,
+) -> Tuple[Data, Set[str], Set[str], List[str], Dict[str, List[str]], Dict[str, List[str]]]:
+    hetero_data, type_names, edge_types, y_nodes, feat_label_dict, node_label_dict = (
+        build_hetero_data(
+            graph=graph,
+            node_num_keys=node_num_keys,
+            node_cat_keys=node_cat_keys,
+            object_type_col=object_type_col,
+            event_activity_col=event_activity_col,
+            viewpoint=viewpoint,
+            node_y_mapping=node_y_mapping,
+            add_reverse_edges=add_reverse_edges,
+            normalize=normalize,
+            one_hot_encoding=one_hot_encoding,
+        )
+    )
+
+    data = to_homogeneous_data(
+        hetero_data,
+        node_num_keys=node_num_keys,
+        node_cat_keys=node_cat_keys,
+        node_types=node_types or sorted(type_names),
+        one_hot_encoding=one_hot_encoding,
+    )
+
+    if path_dataset:
+        torch.save(data, path_dataset)
+
+    return data, type_names, edge_types, y_nodes, feat_label_dict, node_label_dict

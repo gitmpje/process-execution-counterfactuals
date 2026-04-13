@@ -7,6 +7,8 @@ from torch import Tensor
 from torch_geometric.data import HeteroData
 from torch_geometric.explain import Explanation, HeteroExplanation
 
+from gnn.hetero_graph_data import to_homogeneous_data
+from gnn.utils import Metadata
 from tree_search.action import (
     EventNodeDeletion,
     EventNodeInsertion,
@@ -35,6 +37,7 @@ def get_nodes_by_importance(
     explanation: Explanation | HeteroExplanation,
     node_label_dict: Dict[str, List[str]],
     top_k=None,
+    metadata: Metadata = None,
     hetero_data: HeteroData = None,
 ) -> List[Dict]:
     """Return a list of nodes ordered by importance (descending).
@@ -60,7 +63,7 @@ def get_nodes_by_importance(
     results = []
 
     if isinstance(explanation, HeteroExplanation):
-        # --- heterogeneous path (original logic) ---
+        # --- heterogeneous explanation ---
         for nt in explanation.node_types:
             info = explanation[nt]
             if info is None:
@@ -82,8 +85,8 @@ def get_nodes_by_importance(
                 )
 
     else:
-        # --- homogeneous path ---
-        if hetero_data is None:
+        # --- homogeneous explanation ---
+        if (hetero_data is None) or (metadata is None):
             raise ValueError(
                 "hetero_data must be provided for homogeneous Explanation so that "
                 "nodes can be mapped back to their original node types."
@@ -93,7 +96,13 @@ def get_nodes_by_importance(
         if mask is None or not isinstance(mask, Tensor):
             return results
 
-        homo_data = hetero_data.to_homogeneous()
+        homo_data = to_homogeneous_data(
+            hetero_data,
+            metadata.node_num_keys,
+            metadata.node_cat_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
         orig_node_types = hetero_data.node_types  # str list, index = type int
         node_type_tensor = homo_data.node_type  # shape [num_nodes]
 
@@ -132,6 +141,7 @@ def get_feature_labels_by_importance(
     node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]] = None,
     one_hot_encoding: bool = False,
     top_k=None,
+    metadata: Metadata = None,
     hetero_data: HeteroData = None,
 ) -> Dict[str, List]:
     """Return per-node-type feature labels ordered by importance.
@@ -177,7 +187,7 @@ def get_feature_labels_by_importance(
     )
 
     if isinstance(explanation, HeteroExplanation):
-        # --- heterogeneous path (original logic) ---
+        # --- heterogeneous explanation ---
         node_types = explanation.node_types
 
         def get_mask_and_x(nt):
@@ -205,8 +215,8 @@ def get_feature_labels_by_importance(
             )
 
     else:
-        # --- homogeneous path ---
-        if hetero_data is None:
+        # --- homogeneous explanation ---
+        if (hetero_data is None) or (metadata is None):
             raise ValueError(
                 "hetero_data must be provided for homogeneous Explanation so that "
                 "feature importances can be mapped back to the original node types."
@@ -221,7 +231,13 @@ def get_feature_labels_by_importance(
         if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
             return out
 
-        homo_data = hetero_data.to_homogeneous()
+        homo_data = to_homogeneous_data(
+            hetero_data,
+            metadata.node_num_keys,
+            metadata.node_cat_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+        )
         orig_node_types = hetero_data.node_types  # str list, index = type int
         node_type_tensor = homo_data.node_type  # shape [num_nodes]
 
@@ -244,7 +260,7 @@ def get_feature_labels_by_importance(
                 f"feat_{i}" for i in range(nt_num_feats)
             ]
             out[nt] = _make_pairs(
-                per_feat, feat_labels, category_labels, one_hot_encoding, top_k
+                per_feat, feat_labels, category_labels, metadata.one_hot_encoding, top_k
             )
 
     return out
