@@ -104,7 +104,9 @@ for i, data in enumerate(dataset):
     # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
     batch_dict = {
         node_type: torch.zeros(
-            data[node_type].num_nodes, dtype=torch.long, device=device
+            data[node_type].num_nodes if data[node_type].num_nodes else 0,
+            dtype=torch.long,
+            device=device,
         )
         for node_type in metadata.node_types
     }

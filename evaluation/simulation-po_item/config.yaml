@@ -46,7 +46,7 @@ counterfactual:
   viewpoint_event_label: True
   depth_first: "node"
   num_bins: 1
-  max_change_size: 5
+  max_change_size: 3
   node_importance_threshold: 0.01
   attr_importance_threshold: 0.1
 

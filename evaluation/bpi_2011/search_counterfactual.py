@@ -11,6 +11,9 @@ from tree_search.action_helpers import (
     build_object_substitution_actions,
     build_node_deletion_actions,
     build_node_attribute_actions,
+    build_event_move_actions,
+    build_event_insertion_actions,
+    build_object_insertion_actions,
     construct_attribute_spec_dict,
     get_nodes_by_importance,
     get_feature_labels_by_importance,
@@ -194,6 +197,42 @@ event_node_attributes = build_node_attribute_actions(
     node_type="EVENT",
 )
 
+# Event move actions
+target_event_nodes = [
+    (n, target_process_execution.nodes(data=True)[n])
+    for n in nodes_ordered
+    if target_process_execution.nodes(data=True)[n].get("attr", {}).get("type", "")
+    == "EVENT"
+]
+event_move_actions = build_event_move_actions(
+    target_event_nodes=target_event_nodes,
+    candidate_event_nodes=target_event_nodes,
+)
+
+# Events to insert
+event_insertion_object_ids = [
+    n
+    for n, attr in target_process_execution.nodes(data="attr")
+    if attr.get(ocel.object_type_column, "") in [viewpoint]
+]
+event_insertion_actions = build_event_insertion_actions(
+    target_event_nodes=target_event_nodes,
+    event_activities=list(ocel.events[ocel.event_activity].unique()),
+    object_ids=event_insertion_object_ids,
+)
+
+# Objects to insert
+object_insertion_actions = build_object_insertion_actions(
+    target_event_nodes=target_event_nodes,
+    object_types=set(
+        attr[ocel.object_type_column]
+        # only from target_process_execution, as other node types might not exist in learned GNN
+        for _, attr in target_process_execution.nodes(data="attr")
+        if attr.get(ocel.object_type_column)
+    ),
+    metadata=metadata,
+)
+
 # Events that can be deleted
 node_deletion_actions = build_node_deletion_actions(
     target_process_execution.nodes(data=True),
@@ -213,6 +252,18 @@ if depth_first == "node":
         if action.action_space_size() > 0:
             actions_grouped[action.object_id].append(action)
 
+    for action in event_move_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
+    for action in event_insertion_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
+    for action in object_insertion_actions:
+        if action.action_space_size() > 0:
+            actions_grouped[action.event_id].append(action)
+
     for action in node_deletion_actions:
         if action.action_space_size() > 0:
             for option in action.deletion_options:
@@ -226,15 +277,24 @@ elif depth_first == "attribute":
         if action.action_space_size() > 0:
             actions_grouped[action.attribute_name].append(action)
 
-    actions_grouped["object_substitution"] = object_substitution_actions
-    actions_grouped["node_deletion"] = node_deletion_actions
+    # Include all node actions (substitute/insert/delete) in one group
+    actions_grouped["node"] = (
+        object_substitution_actions
+        + event_move_actions
+        + object_insertion_actions
+        + event_insertion_actions
+        + node_deletion_actions
+    )
 
 else:
     available_actions = (
         object_node_attributes
         + event_node_attributes
-        + node_deletion_actions
         + object_substitution_actions
+        + event_move_actions
+        + object_insertion_actions
+        + event_insertion_actions
+        + node_deletion_actions
     )
 
 

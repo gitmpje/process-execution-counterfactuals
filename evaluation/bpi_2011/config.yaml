@@ -58,6 +58,6 @@ counterfactual:
   viewpoint_object_id: "00000001"
   depth_first: "node"
   num_bins: 2
-  max_change_size: 5
+  max_change_size: 3
   node_importance_threshold: 0.001
   attr_importance_threshold: 0.01
