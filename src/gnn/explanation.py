@@ -60,9 +60,10 @@ def generate_explanation(
         data = to_homogeneous_data(
             hetero_data,
             metadata.node_num_keys,
-            metadata.node_num_keys,
+            metadata.node_cat_keys,
             metadata.node_types,
             metadata.one_hot_encoding,
+            metadata.unique_node_type_attribute_columns,
         )
         batch = zeros(
             data.num_nodes if data.num_nodes else 0,

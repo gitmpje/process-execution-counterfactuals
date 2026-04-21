@@ -1,6 +1,7 @@
 dataset:
   path_ocel: "data/socel_hinge.json"
   path_dataset: "data/dataset-pe-HingePack.pt"
+  path_labels: "data/labels-HingePack.json"
   path_metadata: "data/metadata-pe-HingePack.json"
   exclude_attributes:
     - "ocel:eid"
@@ -26,17 +27,31 @@ process_execution:
 
 gnn:
   path_model: "data/model-pe-HingePack.pth"
-  num_layers: 1
+  homogeneous: True
+  num_layers: 2
   batch_size: 10
-  dropout: 0.1
+  dropout: 0.3
   n_epochs: 100
-  start_patience: 25
-  learning_rate: 0.01
+  start_patience: 50
+  learning_rate: 0.001
 
 counterfactual:
-  viewpoint_event_id: "e_packhinges_142"
+  # viewpoint_id: "e_packhinges_142"
+  viewpoint_label: False
   depth_first: "node"
   num_bins: 2
   max_change_size: 3
   node_importance_threshold: 0.01
   attr_importance_threshold: 0.1
+
+counterfactual_graphcfe:
+  path_model: "data/model_graphcfe-HingePack.pth"
+  vae_type: "graphVAE"
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 300
+  learning_rate: 0.01
+  patience: 25

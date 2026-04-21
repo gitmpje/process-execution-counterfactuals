@@ -39,51 +39,22 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from numbers import Number
-from scipy.optimize import linear_sum_assignment
 from torch_geometric.data import Data, HeteroData
 from torch_geometric.nn import DenseGCNConv, DenseGraphConv
-from torch_geometric.utils import to_dense_adj
 
-from gnn.hetero_graph_data import to_homogeneous_data
 from gnn.utils import Metadata
 
-# ---------------------------------------------------------------------------
-# Graph-edit representation (same pattern as other CF methods in codebase)
-# ---------------------------------------------------------------------------
-
-
-@dataclasses.dataclass
-class GraphEdit:
-    """A single modification to apply to a graph."""
-
-    edit_type: str  # "add_edge", "remove_edge", "change_node_feat"
-    # For edge edits:
-    src: Optional[int] = None
-    dst: Optional[int] = None
-    # For node-feature edits:
-    node_idx: Optional[int] = None
-    feature_idx: Optional[int] = None
-    old_value: Optional[float] = None
-    new_value: Optional[float] = None
-
-    def __repr__(self) -> str:
-        if self.edit_type == "add_edge":
-            return f"AddEdge({self.src} → {self.dst})"
-        if self.edit_type == "remove_edge":
-            return f"RemoveEdge({self.src} → {self.dst})"
-        if self.edit_type == "change_node_feat":
-            return (
-                f"ChangeNodeFeat(node={self.node_idx}, "
-                f"feat={self.feature_idx}, "
-                f"{self.old_value:.3f} → {self.new_value:.3f})"
-            )
-        return f"GraphEdit({self.edit_type})"
-
+from evaluation.metrics import (
+    compute_proximity,
+    evaluate_candidate,
+    GraphEdit,
+    matched_diff_to_edits,
+)
+from evaluation.utils import hetero_to_homogeneous_data, to_dense
 
 # ---------------------------------------------------------------------------
 # Dataset-statistics helper
 # ---------------------------------------------------------------------------
-
 
 @dataclasses.dataclass
 class GraphCFEDatasetStats:
@@ -151,250 +122,6 @@ class GraphCFEDatasetStats:
             u_mean_class1=u1,
             x_dim=x_dim,
         )
-
-
-# ---------------------------------------------------------------------------
-# Conversion helpers: HeteroData / Data  ↔  dense (padded) tensors
-# ---------------------------------------------------------------------------
-
-
-def _hetero_to_homogeneous_data(graph: HeteroData | Data, metadata: Metadata) -> Data:
-    if isinstance(graph, HeteroData):
-        return to_homogeneous_data(
-            graph,
-            metadata.node_num_keys,
-            metadata.node_num_keys,
-            metadata.node_types,
-            metadata.one_hot_encoding,
-        )
-    return graph
-
-
-def _to_dense(
-    data: Data,
-    max_num_nodes: int,
-    x_dim: int,
-    device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, int]:
-    """
-    Convert a PyG Data object to dense (padded) adjacency + feature tensors.
-
-    Returns
-    -------
-    features : (1, max_num_nodes, x_dim)
-    adj      : (1, max_num_nodes, max_num_nodes)
-    n_real   : number of real (non-padded) nodes
-    """
-    n_real = min(data.num_nodes, max_num_nodes)
-
-    adj_dense = to_dense_adj(
-        data.edge_index,
-        max_num_nodes=max_num_nodes,
-    )  # (1, max_num_nodes, max_num_nodes)
-
-    if data.x is not None:
-        x = data.x[:n_real]
-        if x.shape[1] != x_dim:
-            diff = x_dim - x.shape[1]
-            x = F.pad(x, (0, diff)) if diff > 0 else x[:, :x_dim]
-    else:
-        x = torch.zeros(n_real, x_dim)
-
-    pad_nodes = max_num_nodes - n_real
-    if pad_nodes > 0:
-        x = F.pad(x, (0, 0, 0, pad_nodes))
-
-    features = x.unsqueeze(0).to(device)  # (1, max_num_nodes, x_dim)
-    adj_dense = adj_dense.to(device)
-    return features, adj_dense, n_real
-
-
-# ---------------------------------------------------------------------------
-# Graph matching
-# ---------------------------------------------------------------------------
-
-
-def _match_nodes(
-    adj_orig: torch.Tensor,  # (n, n)  binary
-    feat_orig: torch.Tensor,  # (n, x_dim)
-    adj_cf: torch.Tensor,  # (n, n)  binary
-    feat_cf: torch.Tensor,  # (n, x_dim)
-) -> torch.Tensor:
-    """
-    Find the optimal bijection π : V(G') → V(G) that minimises the graph-edit
-    distance proxy between G and π(G').
-
-    We use a linear-sum-assignment (Hungarian algorithm) on a cost matrix
-    whose entry C[i, j] measures how dissimilar node i of G is to node j of
-    G' when we also account for their structural neighbourhoods:
-
-        C[i, j] = ‖feat_orig[i] − feat_cf[j]‖₁
-                + ‖adj_orig[i, :] − adj_cf[j, :]‖₁
-
-    Returns
-    -------
-    perm : 1-D LongTensor of length n
-        perm[i] = j means node j in G' corresponds to node i in G.
-        Reorder G' before diffing:
-            adj_cf_aligned  = adj_cf[perm][:, perm]
-            feat_cf_aligned = feat_cf[perm]
-    """
-    # Feature cost  C_feat[i, j] = L1(feat_orig[i], feat_cf[j])
-    feat_cost = torch.cdist(feat_orig.float(), feat_cf.float(), p=1)  # (n, n)
-    # Structural cost  C_struct[i, j] = L1(adj_orig[i,:], adj_cf[j,:])
-    adj_cost = torch.cdist(adj_orig.float(), adj_cf.float(), p=1)  # (n, n)
-
-    cost = feat_cost + adj_cost  # (n, n)
-
-    _, col_ind = linear_sum_assignment(cost.cpu().numpy())
-    # col_ind[i] = index in G' that is matched to node i in G
-    return torch.tensor(col_ind, dtype=torch.long)
-
-
-def _compute_proximity(
-    feat_orig: torch.Tensor,  # (n, x_dim)
-    adj_orig: torch.Tensor,  # (n, n)  binary
-    feat_cf: torch.Tensor,  # (n, x_dim)
-    adj_cf: torch.Tensor,  # (n, n)  binary
-    adj_cf_prob: Optional[torch.Tensor] = None,  # (n, n)  raw sigmoid output
-) -> dict:
-    """
-    Compute proximity metrics between original and counterfactual graphs.
-
-    Follows the CLEAR paper (GraphCFE) definition of proximity:
-    - dist_x: mean pairwise L2 distance on flattened features / 4.0
-    - dist_a: binary cross entropy on adjacency matrices
-    - proximity: combined score (dist_x + dist_a)
-
-    Parameters
-    ----------
-    feat_orig : (n, x_dim) – original node features
-    adj_orig : (n, n) – original adjacency (binary)
-    feat_cf : (n, x_dim) – counterfactual node features
-    adj_cf : (n, n) – counterfactual adjacency (binary)
-    adj_cf_prob : (n, n) – counterfactual adjacency (probabilistic output), if not provided use adj_cf
-
-    Returns
-    -------
-    dict with keys 'dist_x', 'dist_a', 'proximity'
-    """
-    adj_cf_prob = adj_cf_prob if adj_cf_prob is not None else adj_cf
-
-    # Feature distance: pairwise L2 distance
-    n = feat_orig.shape[0]
-    if n > 0:
-        pdist = nn.PairwiseDistance(p=2)
-        feat_cf_reshaped = feat_cf.view(n, -1)
-        feat_orig_reshaped = feat_orig.view(n, -1)
-        dist_x = pdist(feat_orig_reshaped, feat_cf_reshaped) / 4.0
-        dist_x = torch.mean(dist_x)
-    else:
-        dist_x = torch.tensor(0.0, device=device)
-
-    # Adjacency distance: binary cross entropy
-    dist_a = F.binary_cross_entropy(adj_cf_prob.float(), adj_orig.float())
-
-    # Proximity
-    cos = nn.CosineSimilarity(dim=-1, eps=1e-6)
-    cos_sim = cos(feat_orig, feat_cf)
-    proximity_x = torch.mean(cos_sim)
-
-    proximity_a = (adj_orig == adj_cf).float().mean()
-
-    return {
-        "dist_x": dist_x.item(),
-        "dist_a": dist_a.item(),
-        "proximity_x": proximity_x.item(),
-        "proximity_a": proximity_a.item(),
-    }
-
-
-def _matched_diff_to_edits(
-    adj_orig: torch.Tensor,  # (N, N)
-    adj_cf: torch.Tensor,  # (N, N)  raw sigmoid output
-    feat_orig: torch.Tensor,  # (N, x_dim)
-    feat_cf: torch.Tensor,  # (N, x_dim)
-    adj_threshold: float = 0.5,
-    feat_threshold: float = 0.5,
-    graph_matching: bool = False,
-) -> List[GraphEdit]:
-    """
-    1. Restrict to the n_real real (non-padded) nodes plus any extra nodes
-       present in the reconstructed graph.
-    2. Binarise the reconstructed adjacency.
-    3. Run graph matching (Hungarian) to align G' node indices to G.
-    4. Diff the aligned matrices to produce GraphEdit objects.
-    """
-    # Use the maximum node size across original and reconstructed tensors so
-    # that insertions / deletions beyond the original n_real region are not
-    # ignored.
-    n = max(
-        adj_orig.size(0),
-        adj_orig.size(1),
-        adj_cf.size(0),
-        adj_cf.size(1),
-        feat_orig.size(0),
-        feat_cf.size(0),
-    )
-
-    def _pad_adj(matrix: torch.Tensor, size: int) -> torch.Tensor:
-        if matrix.size(0) == size and matrix.size(1) == size:
-            return matrix
-        return F.pad(
-            matrix,
-            (0, size - matrix.size(1), 0, size - matrix.size(0)),
-            value=0.0,
-        )
-
-    def _pad_feat(matrix: torch.Tensor, size: int) -> torch.Tensor:
-        if matrix.size(0) == size:
-            return matrix
-        return F.pad(matrix, (0, 0, 0, size - matrix.size(0)), value=0.0)
-
-    A = _pad_adj(adj_orig[:n, :n], n)
-    X = _pad_feat(feat_orig[:n], n)
-    Acf = _pad_adj(adj_cf[:n, :n], n)
-    Xcf = _pad_feat(feat_cf[:n], n)
-
-    A = (A > adj_threshold).float()
-    Acf = (Acf > adj_threshold).float()
-
-    # Graph matching: find permutation π s.t. Acf[π][:,π] ≈ A
-    if graph_matching:
-        perm = _match_nodes(A, X, Acf, Xcf)  # (n,)
-
-        A_cf_aligned = Acf[perm][:, perm]  # (n, n)
-        X_cf_aligned = Xcf[perm]  # (n, x_dim)
-    else:
-        A_cf_aligned = Acf
-        X_cf_aligned = Xcf
-
-    edits: List[GraphEdit] = []
-
-    # Edge additions
-    for i, j in (A_cf_aligned - A).clamp(min=0).nonzero(as_tuple=False).tolist():
-        if i != j:
-            edits.append(GraphEdit(edit_type="add_edge", src=i, dst=j))
-
-    # Edge removals
-    for i, j in (A - A_cf_aligned).clamp(min=0).nonzero(as_tuple=False).tolist():
-        if i != j:
-            edits.append(GraphEdit(edit_type="remove_edge", src=i, dst=j))
-
-    # Node-feature changes
-    diff = (X_cf_aligned - X).abs()
-    for node_idx, feat_idx in (diff > feat_threshold).nonzero(as_tuple=False).tolist():
-        edits.append(
-            GraphEdit(
-                edit_type="change_node_feat",
-                node_idx=int(node_idx),
-                feature_idx=int(feat_idx),
-                old_value=float(X[node_idx, feat_idx].item()),
-                new_value=float(X_cf_aligned[node_idx, feat_idx].item()),
-            )
-        )
-
-    return edits
 
 
 # ---------------------------------------------------------------------------
@@ -473,11 +200,11 @@ class GraphCFEExplainer:
         List[GraphEdit] – ordered edits that transform ``graph`` into the
         counterfactual.  Apply them in sequence to reproduce G'.
         """
-        data = _hetero_to_homogeneous_data(graph, metadata)
+        data = hetero_to_homogeneous_data(graph, metadata)
         stats = self.stats
         dev = self.device
 
-        features_orig, adj_orig, n_real = _to_dense(
+        features_orig, adj_orig, _ = to_dense(
             data, stats.max_num_nodes, stats.x_dim, dev
         )
 
@@ -500,7 +227,7 @@ class GraphCFEExplainer:
                 adj_cf = torch.bernoulli(adj_cf_prob)
                 feat_cf = output["features_reconst"]  # (1, N, x_dim)
 
-                edits = _matched_diff_to_edits(
+                edits = matched_diff_to_edits(
                     adj_orig[0],
                     adj_cf[0],
                     features_orig[0],
@@ -552,11 +279,11 @@ class GraphCFEExplainer:
             - 'evaluation_valid': ``True`` if the selected counterfactual is
               predicted as ``target_class`` by ``evaluation_model``.
         """
-        data = _hetero_to_homogeneous_data(graph, metadata)
+        data = hetero_to_homogeneous_data(graph, metadata)
         stats = self.stats
         dev = self.device
 
-        features_orig, adj_orig, n_real = _to_dense(
+        features_orig, adj_orig, _ = to_dense(
             data, stats.max_num_nodes, stats.x_dim, dev
         )
 
@@ -580,7 +307,7 @@ class GraphCFEExplainer:
                 adj_cf = torch.bernoulli(adj_cf_prob)
                 feat_cf = output["features_reconst"]  # (1, N, x_dim)
 
-                edits = _matched_diff_to_edits(
+                edits = matched_diff_to_edits(
                     adj_orig[0],
                     adj_cf[0],
                     features_orig[0],
@@ -596,7 +323,7 @@ class GraphCFEExplainer:
                     best_feat_cf = feat_cf
                     best_adj_cf = adj_cf
                     # Compute proximity for this best candidate
-                    best_proximity = _compute_proximity(
+                    best_proximity = compute_proximity(
                         features_orig[0],
                         adj_orig[0],
                         feat_cf[0],
@@ -605,13 +332,14 @@ class GraphCFEExplainer:
                     )
 
                     if evaluation_model is not None:
-                        evaluation_results = self._evaluate_candidate(
+                        evaluation_results = evaluate_candidate(
                             graph,
                             metadata,
                             feat_cf[0],
                             adj_cf[0],
                             evaluation_model,
                             target_class,
+                            adj_threshold=self.adj_threshold,
                         )
                         best_proximity.update(evaluation_results)
 
@@ -621,68 +349,6 @@ class GraphCFEExplainer:
             best_edits if best_edits is not None else [],
             best_proximity if best_proximity is not None else {},
         )
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
-
-    def _evaluate_candidate(
-        self,
-        graph: HeteroData | Data,
-        metadata: Metadata,
-        candidate_feat: torch.Tensor,
-        candidate_adj: torch.Tensor,
-        evaluation_model: torch.nn.Module,
-        target_class: int,
-    ) -> dict:
-        """Evaluate the selected counterfactual candidate with a classifier."""
-        # Convert to a homogeneous graph if needed, then override features and edges.
-        if isinstance(graph, HeteroData):
-            eval_data = to_homogeneous_data(
-                graph,
-                metadata.node_num_keys,
-                metadata.node_num_keys,
-                metadata.node_types,
-                metadata.one_hot_encoding,
-            )
-        else:
-            eval_data = graph.clone()
-
-        edge_index = (
-            (candidate_adj > self.adj_threshold)
-            .nonzero(as_tuple=False)
-            .t()
-            .contiguous()
-        )
-        eval_data.x = candidate_feat
-        eval_data.edge_index = edge_index.to(self.device)
-
-        batch = torch.zeros(
-            eval_data.num_nodes if eval_data.num_nodes else 0,
-            dtype=torch.long,
-            device=self.device,
-        )
-
-        try:
-            out = evaluation_model(eval_data.x, eval_data.edge_index, batch)
-        except TypeError:
-            try:
-                out = evaluation_model(eval_data)
-            except Exception as exc:
-                raise ValueError(
-                    "evaluation_model must accept either (x, edge_index, batch) "
-                    "or a single PyG Data object."
-                ) from exc
-
-        prediction = out.argmax(dim=-1)
-        if prediction.numel() > 1:
-            prediction = prediction[0]
-        prediction = int(prediction.cpu().item())
-
-        return {
-            "evaluation_prediction": prediction,
-            "evaluation_valid": prediction == target_class,
-        }
 
 
 # ---------------------------------------------------------------------------
@@ -1070,3 +736,184 @@ class MLP(nn.Module):
             else:
                 h = self._act_f[c](self.fc[c](h))
         return h
+
+
+# Build dense training tensors for GraphCFE and train the VAE on the available dataset.
+def build_graphcfe_training_tensors(dataset, labels, stats, device):
+    features = []
+    adjs = []
+    ys = []
+    us = []
+    for data, label in zip(dataset, labels, strict=False):
+        feat, adj, _ = to_dense(data, stats.max_num_nodes, stats.x_dim, device)
+        features.append(feat)
+        adjs.append(adj)
+        ys.append(
+            torch.tensor([[float(label.item())]], dtype=torch.float32, device=device)
+        )
+
+        num_edges = int(data.edge_index.shape[1])
+        num_nodes = max(int(data.num_nodes), 1)
+        u_value = float(num_edges / num_nodes)
+        us.append(torch.tensor([[u_value]], dtype=torch.float32, device=device))
+
+    return (
+        torch.cat(features, dim=0),
+        torch.cat(adjs, dim=0),
+        torch.cat(ys, dim=0),
+        torch.cat(us, dim=0),
+    )
+
+
+def train_graphcfe_model(
+    graphcfe_model,
+    features,
+    adjs,
+    ys,
+    us,
+    num_epochs=50,
+    batch_size=16,
+    learning_rate=1e-3,
+    device="cpu",
+    patience=10,
+    min_delta=1e-4,
+):
+    """Train GraphCFE model using CLEAR loss from https://github.com/jma712/GraphCFE.
+
+    Parameters
+    ----------
+    graphcfe_model : torch.nn.Module
+        The GraphCFE model to train.
+    features : torch.Tensor
+        Input feature tensor of shape (num_samples, max_num_nodes, x_dim).
+    adjs : torch.Tensor
+        Input adjacency tensor of shape (num_samples, max_num_nodes, max_num_nodes).
+    ys : torch.Tensor
+        Target labels of shape (num_samples, 1).
+    us : torch.Tensor
+        Confounding variable u of shape (num_samples, 1).
+    num_epochs : int
+        Maximum number of training epochs.
+    batch_size : int
+        Batch size for training.
+    learning_rate : float
+        Learning rate for the Adam optimizer.
+    device : str or torch.device
+        Device to train on.
+    patience : int
+        Number of epochs to wait for improvement before early stopping.
+    min_delta : float
+        Minimum change in loss to qualify as an improvement.
+
+    Returns
+    -------
+    graphcfe_model : torch.nn.Module
+        The trained model (best state if early stopping triggered).
+    """
+    graphcfe_model.to(device)
+    optimizer = torch.optim.Adam(graphcfe_model.parameters(), lr=learning_rate)
+    num_samples = features.size(0)
+
+    # Early stopping state
+    best_loss = float("inf")
+    best_model_state = None
+    epochs_without_improvement = 0
+
+    def distance_feature(feat_1, feat_2):
+        """Computes mean pairwise L2 distance between feature tensors."""
+        pdist = nn.PairwiseDistance(p=2)
+        output = pdist(feat_1, feat_2) / 4.0
+        return torch.mean(output)
+
+    def distance_graph_prob(adj_1, adj_2_prob):
+        """Computes binary cross entropy distance between adjacency matrices."""
+        return F.binary_cross_entropy(adj_2_prob, adj_1)
+
+    for epoch in range(1, num_epochs + 1):
+        graphcfe_model.train()
+        perm = torch.randperm(num_samples, device=device)
+        total_loss = 0.0
+
+        for start in range(0, num_samples, batch_size):
+            batch_idx = perm[start : start + batch_size]
+            batch_x = features[batch_idx]
+            batch_adj = adjs[batch_idx]
+            batch_y = ys[batch_idx]
+            batch_u = us[batch_idx]
+
+            outputs = graphcfe_model(batch_x, batch_u, batch_adj, batch_y)
+            recon_adj = outputs["adj_reconst"]
+            recon_x = outputs["features_reconst"]
+            z_mu = outputs["z_mu"]
+            z_logvar = outputs["z_logvar"]
+            z_u_mu = outputs["z_u_mu"]
+            z_u_logvar = outputs["z_u_logvar"]
+
+            # KL loss: divergence between encoder and prior distributions
+            loss_kl = 0.5 * (
+                (z_u_logvar - z_logvar)
+                + ((z_logvar.exp() + (z_mu - z_u_mu).pow(2)) / z_u_logvar.exp())
+                - 1.0
+            )
+            loss_kl = torch.mean(loss_kl)
+
+            # Similarity loss: weighted distance on features and adjacency
+            batch_size_actual = batch_x.size(0)
+            dist_x = distance_feature(
+                batch_x.view(batch_size_actual, -1),
+                recon_x.view(batch_size_actual, -1),
+            )
+            dist_a = distance_graph_prob(batch_adj, recon_adj)
+
+            beta = 10.0
+            loss_sim = beta * dist_x + 10.0 * dist_a
+
+            # Total loss (without CFE loss since no classifier during training)
+            loss = loss_sim + loss_kl
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * batch_size_actual
+
+        avg_loss = total_loss / num_samples
+
+        # Early stopping check
+        if avg_loss < best_loss - min_delta:
+            best_loss = avg_loss
+            best_model_state = {
+                k: v.cpu().clone() for k, v in graphcfe_model.state_dict().items()
+            }
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if (
+            epoch % 10 == 0
+            or epoch == 1
+            or epoch == num_epochs
+            or epochs_without_improvement == 0
+        ):
+            print(
+                f"[GraphCFE] epoch {epoch}/{num_epochs} "
+                f"loss={avg_loss:.4f} "
+                f"loss_sim={loss_sim.item():.4f} "
+                f"loss_kl={loss_kl.item():.4f} "
+                f"best={best_loss:.4f} "
+                f"patience={epochs_without_improvement}/{patience}"
+            )
+
+        if epochs_without_improvement >= patience:
+            print(
+                f"[GraphCFE] Early stopping at epoch {epoch}. "
+                f"No improvement for {patience} epochs. Best loss: {best_loss:.4f}"
+            )
+            break
+
+    # Restore best model state
+    if best_model_state is not None:
+        graphcfe_model.load_state_dict(best_model_state)
+        graphcfe_model.to(device)
+
+    graphcfe_model.eval()
+    return graphcfe_model

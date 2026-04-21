@@ -60,9 +60,10 @@ if homogeneous:
         _data = to_homogeneous_data(
             data,
             metadata.node_num_keys,
-            metadata.node_num_keys,
+            metadata.node_cat_keys,
             metadata.node_types,
             metadata.one_hot_encoding,
+            metadata.unique_node_type_attribute_columns,
         )
         _data.y = data.y
         _dataset.append(_data)
@@ -120,6 +121,7 @@ else:
         device=device,
         criterion=torch.nn.CrossEntropyLoss(),
         output_type="binary",
+        learning_rate=learning_rate,
     )
 
 trainer.train(
@@ -128,7 +130,6 @@ trainer.train(
     test_loader,
     n_epochs=n_epochs,
     start_patience=start_patience,
-    learning_rate=learning_rate,
 )
 
 torch.save(model, path_model)

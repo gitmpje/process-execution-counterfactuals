@@ -20,6 +20,7 @@ class Metadata:
     normalized: bool
     one_hot_encoding: bool
     add_reverse_edges: bool
+    unique_node_type_attribute_columns: bool=False
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -38,6 +39,7 @@ class Metadata:
             "normalized": self.normalized,
             "one_hot_encoding": self.one_hot_encoding,
             "add_reverse_edges": self.add_reverse_edges,
+            "unique_node_type_attribute_columns": self.unique_node_type_attribute_columns,
         }
 
     @classmethod
@@ -55,6 +57,7 @@ class Metadata:
             normalized=metadata_dict.get("normalized", False),
             one_hot_encoding=metadata_dict.get("one_hot_encoding", False),
             add_reverse_edges=metadata_dict.get("add_reverse_edges", False),
+            unique_node_type_attribute_columns=metadata_dict.get("unique_node_type_attribute_columns", False),
         )
 
 
@@ -244,6 +247,7 @@ def build_process_execution_dataset(
     normalize: bool = False,
     one_hot_encoding: bool = False,
     homogeneous: bool = False,
+    unique_node_type_attribute_columns: bool = False,
     path_pe_dataset: Optional[str] = None,
 ) -> Tuple[List[Data | HeteroData], Metadata]:
     """
@@ -349,6 +353,7 @@ def build_process_execution_dataset(
                 node_cat_keys=node_cat_keys,
                 node_types=sorted(node_types_set),
                 one_hot_encoding=one_hot_encoding,
+                unique_node_type_attribute_columns=unique_node_type_attribute_columns,
             )
             for hetero_data in dataset
         ]

@@ -9,6 +9,7 @@ from collections import Counter
 from networkx import Graph
 from numpy import array, isnan, linspace
 from pandas import Series
+from pm4py.objects.ocel.exporter.jsonocel import exporter
 from scipy.stats import gaussian_kde
 from torch import save as tsave, tensor
 
@@ -29,12 +30,14 @@ with open(config_file) as f:
 # Dataset
 dataset_cfg = cfg["dataset"]
 path_xes = dataset_cfg["path_xes"]
+path_ocel = dataset_cfg.get("path_ocel")
 path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
 path_sample = dataset_cfg["path_sample"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
 normalize = dataset_cfg.get("normalize", False)
 one_hot_encoding = dataset_cfg.get("one_hot_encoding", False)
+add_reverse_edges = dataset_cfg.get("add_reverse_edges", False)
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
@@ -51,6 +54,9 @@ event_log_sample = event_log[event_log[viewpoint].isin(sample_objects)]
 
 # %% Convert event log to OCEL and Networkx graph
 ocel, ocel_nx = convert_event_log_ocel(event_log_sample)
+
+if path_ocel:
+    exporter.apply(ocel, path_ocel, variant=exporter.Variants.OCEL20_STANDARD)
 
 # %% Define features for dataset
 viewpoint_objects = event_log_sample[viewpoint].unique()
@@ -126,7 +132,7 @@ for idx, obj in enumerate(viewpoint_objects):
         object_type_col=ocel.object_type_column,
         event_activity_col=ocel.event_activity,
         viewpoint=viewpoint,
-        add_reverse_edges=False,
+        add_reverse_edges=add_reverse_edges,
         normalize=normalize,
         one_hot_encoding=one_hot_encoding,
     )
@@ -161,6 +167,7 @@ metadata = Metadata(
     feat_label_dict=feat_label_dict,
     normalized=normalize,
     one_hot_encoding=one_hot_encoding,
+    add_reverse_edges=add_reverse_edges,
 )
 
 with open(path_metadata, "w") as f:
@@ -168,62 +175,72 @@ with open(path_metadata, "w") as f:
 
 
 # %% Determine threshold and assign final class y values to each HeteroData
-def find_valleys(values):
-    """
-    Find indices and values of valleys in a list.
-    A valley is an element strictly less than its immediate neighbors.
+# def find_valleys(values):
+#     """
+#     Find indices and values of valleys in a list.
+#     A valley is an element strictly less than its immediate neighbors.
 
-    :param values: List of numeric values
-    :return: List of tuples (index, value) for each valley
-    """
-    # Input validation
-    if not isinstance(values, list) or not all(
-        isinstance(x, (int, float)) for x in values
-    ):
-        raise ValueError("Input must be a list of numbers.")
+#     :param values: List of numeric values
+#     :return: List of tuples (index, value) for each valley
+#     """
+#     # Input validation
+#     if not isinstance(values, list) or not all(
+#         isinstance(x, (int, float)) for x in values
+#     ):
+#         raise ValueError("Input must be a list of numbers.")
 
-    valleys = []
-    n = len(values)
+#     valleys = []
+#     n = len(values)
 
-    # Need at least 3 points to have a valley
-    if n < 3:
-        return valleys
+#     # Need at least 3 points to have a valley
+#     if n < 3:
+#         return valleys
 
-    for i in range(1, n - 1):
-        if values[i] < values[i - 1] and values[i] < values[i + 1]:
-            valleys.append((i, values[i]))
+#     for i in range(1, n - 1):
+#         if values[i] < values[i - 1] and values[i] < values[i + 1]:
+#             valleys.append((i, values[i]))
 
-    return valleys
+#     return valleys
 
 
-p_times = array([data.y for data in dataset if not isnan(data.y)])
-kde = gaussian_kde(p_times)
-x_min = min(p_times)
-x_max = max(p_times)
-x = linspace(x_min, x_max, 500)
-y = kde(x)
+# p_times = array([data.y for data in dataset if not isnan(data.y)])
+# kde = gaussian_kde(p_times)
+# x_min = min(p_times)
+# x_max = max(p_times)
+# x = linspace(x_min, x_max, 500)
+# y = kde(x)
 
-# Use first valley in KDE as threshold
-threshold = x[find_valleys(list(y))[0][0]]
+# # Use first valley in KDE as threshold
+# threshold = x[find_valleys(list(y))[0][0]]
 
-Series(p_times).plot(kind="kde")
-plt.axvline(
-    x=threshold,
-    color="red",
-    linestyle="--",
-)
+# Series(p_times).plot(kind="kde")
+# plt.axvline(
+#     x=threshold,
+#     color="red",
+#     linestyle="--",
+# )
 
-for data in dataset:
-    y_orig = data.y
-    y_class = int(y_orig <= threshold)
+# for data in dataset:
+#     y_orig = data.y
+#     y_class = int(y_orig <= threshold)
 
-    # Retain orignal y value on node-level
-    data[viewpoint].y = tensor([y_orig] * data[viewpoint].y.size(-1)).reshape(-1, 1)
+#     # Retain orignal y value on node-level
+#     data[viewpoint].y = tensor([y_orig] * data[viewpoint].y.size(-1)).reshape(-1, 1)
 
-    # Update graph-level y
-    data.y = y_class
+#     # Update graph-level y
+#     data.y = y_class
 
-# Overwrite dataset
-tsave(dataset, path_dataset)
+# # Overwrite dataset
+# tsave(dataset, path_dataset)
 
-print("Classes:", Counter([d.y for d in dataset]))
+# print("Classes:", Counter([d.y for d in dataset]))
+
+# %% Store labels per viewpoint object
+path_labels = dataset_cfg.get("path_labels")
+if path_labels:
+    label_dict = {"viewpoint_object_labels": {}}
+    for i, data in enumerate(dataset):
+        label_dict["viewpoint_object_labels"][viewpoint_objects[i]] = data.y
+
+    with open(path_labels, "w") as f:
+        label_dict = json.dump(label_dict, f, indent=2)

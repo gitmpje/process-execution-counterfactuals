@@ -7,7 +7,7 @@ from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from process_execution.process_execution import ProcessExecution
-from process_execution.comparison import (
+from tree_search.action_costs import (
     attribute_diff,
     attribute_diff_numeric,
     node_subst_cost,

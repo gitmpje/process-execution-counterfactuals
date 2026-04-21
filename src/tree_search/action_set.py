@@ -253,11 +253,11 @@ class ActionSet:
         """Return True if node is not already involved in a conflicting action."""
         return node_id not in self._affected_nodes(exclude_action=exclude_action)
 
-    def is_change_allowed(self, action: Action, change_value: Any) -> bool:
-        """Return False if the node(s) in this change are already modified."""
-        affected = self._affected_nodes(exclude_action=action)
-
-        # Build node set for this specific action change
+    def is_change_allowed(
+        self, action: Action, change_value: Any, p: ProcessExecution
+    ) -> bool:
+        """Return False if the node(s) in this change are already modified or do not exist."""
+        # Build node set for this specific action change (only pre-existing nodes)
         candidate_nodes = set()
 
         if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
@@ -270,26 +270,33 @@ class ActionSet:
 
         elif isinstance(action, EventNodeSubstitution):
             candidate_nodes.add(action.event_id)
-            if change_value:
-                candidate_nodes.add(change_value[0])
 
         elif isinstance(action, ObjectNodeSubstitution):
             candidate_nodes.add(action.object_id)
-            if change_value:
-                candidate_nodes.add(change_value[0])
 
         elif isinstance(action, (EventNodeDeletion, ObjectNodeDeletion)):
             if change_value:
                 candidate_nodes.update(change_value)
 
         elif isinstance(action, (EventNodeInsertion, ObjectNodeInsertion)):
-            # Insertion is anchored on a source event; this event must not be used by
-            # any other conflicting operation in the same action set.
+            # Insertion is anchored on a source event; this event must exist
             candidate_nodes.add(action.event_id)
 
         else:
             # Unknown action type, can't determine safety; be conservative
             return False
+
+        # Check if all required nodes exist in the graph
+        existing_nodes = set(p.nodes)
+        if not candidate_nodes.issubset(existing_nodes):
+            return False
+
+        # Check for conflicts with other actions
+        affected = self._affected_nodes(exclude_action=action)
+
+        if isinstance(action, (NodeAttributeNumeric, NodeAttributeCategorical)):
+            # Attribute changes can always co-exist with other changes on the same node
+            return True
 
         # Determine whether any node is already affected by other actions
         return candidate_nodes.isdisjoint(affected)

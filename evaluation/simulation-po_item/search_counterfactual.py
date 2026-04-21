@@ -23,11 +23,10 @@ from tree_search.action_helpers import (
 from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
 
-from gnn.clear_graph_cfe import (
-    _compute_proximity,
-    _matched_diff_to_edits,
-    GraphCFEDatasetStats,
-)
+from evaluation.clear_graph_cfe import GraphCFEDatasetStats
+from evaluation.metrics import compute_proximity, matched_diff_to_edits
+from evaluation.utils import get_dense_representation
+
 from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 from gnn.utils import Metadata
 from gnn.explanation import generate_explanation
@@ -35,7 +34,6 @@ from process_execution.process_execution import extract_process_execution
 
 from utils import (
     _replace_scenario_prefix,
-    get_dense_representation,
     to_homogeneous,
     visualize_process_execution,
 )
@@ -81,7 +79,7 @@ seed(random_seed)
 
 # Counterfactual search
 counterfactual_cfg = cfg["counterfactual"]
-viewpoint_event_label = counterfactual_cfg["viewpoint_event_label"]
+viewpoint_label = counterfactual_cfg.get("viewpoint_label")
 depth_first = counterfactual_cfg.get("depth_first")
 num_bins = counterfactual_cfg["num_bins"]
 max_change_size = counterfactual_cfg["max_change_size"]
@@ -142,6 +140,7 @@ def process_outcome(p: Graph) -> bool:
                 metadata.node_cat_keys,
                 metadata.node_types,
                 metadata.one_hot_encoding,
+                metadata.unique_node_type_attribute_columns,
             )
             batch = torch.zeros(
                 data.num_nodes if data.num_nodes else 0,
@@ -171,33 +170,21 @@ def process_outcome(p: Graph) -> bool:
     return bool(out.argmax(dim=-1).cpu().item())
 
 
-# Determine viewpoint_event_id from labels file + config label
-with open(path_labels, "r") as f:
-    labels_data = json.load(f)
-
-if "viewpoint_event_labels" not in labels_data:
-    raise KeyError(f"Missing 'viewpoint_event_labels' key in {path_labels}")
-
-if counterfactual_cfg.get("viewpoint_event_id"):
-    viewpoint_event_ids = [counterfactual_cfg.get("viewpoint_event_id")]
+# Determine viewpoint id(s)
+viewpoint_ids = []
+if counterfactual_cfg.get("viewpoint_id"):
+    viewpoint_ids.append(counterfactual_cfg.get("viewpoint_id"))
     visualize = True
 else:
-    viewpoint_event_ids = []
+    with open(path_labels, "r") as f:
+        labels_data = json.load(f)
     for event_id, event_label in labels_data["viewpoint_event_labels"].items():
-        if event_label == viewpoint_event_label:
-            process_execution = extract_process_execution(
-                ocel_nx,
-                event_id,
-                object_types=process_execution_object_types,
-                target_activity_type=process_execution_target_activity,
-                backward=trace_backward,
-            )
-            if process_outcome(process_execution) == viewpoint_event_label:
-                viewpoint_event_ids.append(event_id)
+        if event_label == viewpoint_label:
+            viewpoint_ids.append(event_id)
 
-if not viewpoint_event_ids:
+if not viewpoint_ids:
     raise ValueError(
-        f"No event found in {path_labels} with actual and predicted label {viewpoint_event_label}"
+        f"No viewpoint IDs found in {path_labels} with actual label {viewpoint_label}"
     )
 
 # %% Construct actions for counterfactual generation (tree search)
@@ -218,14 +205,14 @@ attribute_spec_dict = construct_attribute_spec_dict(
 )
 
 results = []
-for viewpoint_event_id in viewpoint_event_ids:
-    print("Viewpoint event:", viewpoint_event_id)
+for viewpoint_id in viewpoint_ids:
+    print("Viewpoint id:", viewpoint_id)
 
     # Extract target process execution
     target_process_execution = deepcopy(
         extract_process_execution(
             ocel_nx,
-            viewpoint_event_id,
+            viewpoint_id,
             object_types=process_execution_object_types,
             target_activity_type=process_execution_target_activity,
             backward=trace_backward,
@@ -235,10 +222,13 @@ for viewpoint_event_id in viewpoint_event_ids:
     if visualize:
         visualize_process_execution(
             target_process_execution,
-            f"data/{SCENARIO_PREFIX}-{viewpoint_event_id}-target_pe.svg",
+            f"data/{SCENARIO_PREFIX}-{viewpoint_id}-target_pe.svg",
         )
 
     counterfactual_label = not process_outcome(target_process_execution)
+    if counterfactual_label == viewpoint_label:
+        print(f"Skipping {viewpoint_id}")
+        continue
 
     target_explanation, hetero_data, feat_label_dict, node_label_dict = (
         generate_explanation(
@@ -446,6 +436,23 @@ for viewpoint_event_id in viewpoint_event_ids:
 
     # %% Display results
     print(f"Number of selected action sets: {len(selected_action_sets)}")
+    if not selected_action_sets:
+        print("No counterfactual found for viewpoint", viewpoint_id)
+        results.append(
+            {
+                "depth_first": depth_first,
+                "viewpoint_id": viewpoint_id,
+                "count_explored": tree_search.count_explored,
+                "action_set": None,
+                "action_size": float("nan"),
+                "edits": None,
+                "proximity_metrics": None,
+                "proximity_metrics_all": None,
+                "evaluation_valid": False,
+            }
+        )
+        continue
+
     sorted_action_sets = sorted(
         selected_action_sets, key=lambda a: a.action_size(), reverse=True
     )
@@ -467,7 +474,7 @@ for viewpoint_event_id in viewpoint_event_ids:
         if visualize:
             visualize_process_execution(
                 target_process_execution,
-                f"data/{SCENARIO_PREFIX}-{viewpoint_event_id}-cf_pe.svg",
+                f"data/{SCENARIO_PREFIX}-{viewpoint_id}-cf_pe.svg",
             )
 
         features_cf, adj_cf, _ = get_dense_representation(
@@ -480,10 +487,10 @@ for viewpoint_event_id in viewpoint_event_ids:
         )
         action_set.undo_changes(target_process_execution, changes)
 
-        proximity_metrics = _compute_proximity(
+        proximity_metrics = compute_proximity(
             features_orig, adj_orig, features_cf, adj_cf
         )
-        edits = _matched_diff_to_edits(
+        edits = matched_diff_to_edits(
             adj_orig[0],
             adj_cf[0],
             features_orig[0],
@@ -494,12 +501,12 @@ for viewpoint_event_id in viewpoint_event_ids:
         )
 
         proximity_metrics_all = {}
-        for event_id in viewpoint_event_ids:
+        for other_id in viewpoint_ids:
             # Extract target process execution
             process_execution = deepcopy(
                 extract_process_execution(
                     ocel_nx,
-                    event_id,
+                    other_id,
                     object_types=process_execution_object_types,
                     target_activity_type=process_execution_target_activity,
                     backward=trace_backward,
@@ -513,25 +520,26 @@ for viewpoint_event_id in viewpoint_event_ids:
                 ocel.event_activity,
                 device,
             )
-            proximity_metrics_all[event_id] = _compute_proximity(
+            proximity_metrics_all[other_id] = compute_proximity(
                 features_cf, adj_cf, features_i, adj_i
             )
 
         results.append(
             {
                 "depth_first": depth_first,
-                "viewpoint_event_id": viewpoint_event_id,
+                "viewpoint_id": viewpoint_id,
                 "count_explored": tree_search.count_explored,
                 "action_set": str(action_set),
                 "action_size": action_set.action_size(),
                 "edits": str(edits),
                 "proximity_metrics": proximity_metrics,
                 "proximity_metrics_all": proximity_metrics_all,
+                "evaluation_valid": True,
             }
         )
 
 # Only store results if evaluated for multiple process executions
-if len(viewpoint_event_ids) > 1:
+if len(viewpoint_ids) > 1:
     run_id = os.getenv("RUN_ID")
     with open(
         f"results/{SCENARIO_PREFIX}{'-hetero' if not homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",

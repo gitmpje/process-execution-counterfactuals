@@ -53,15 +53,60 @@ def check_edit(node_feat_edit_str: str, threshold: float):
 
 
 # %%
+# Configuration: specify which child folders to process
+CHILD_FOLDERS = [
+    "road_traffic_fine_management",
+    # "simulation-po_item",
+]
+SCENARIO_PREFIXES = {
+    "simulation-po_item": [
+        "scenario_01",
+        "scenario_02",
+        "scenario_03",
+        "scenario_04",
+        "scenario_05",
+        "scenario_06",
+        "scenario_07",
+        "scenario_08",
+    ],
+}
+BASE_DIR = Path(".")
+
 run_data = []
-result_dir = Path("results")
 
 
-def find_result_files(scenario_prefixes, result_dir=result_dir):
+def find_result_files(child_folder, scenario_prefixes=None):
+    """Find result JSON files in a child folder.
+
+    Args:
+        child_folder: Name of the child folder (e.g., 'simulation-po_item')
+        scenario_prefixes: List of scenario prefixes to filter by, or None to load all
+
+    Returns:
+        List of Path objects to result files
+    """
+    result_dir = BASE_DIR / child_folder / "results"
+    if not result_dir.exists():
+        print(f"Warning: {result_dir} does not exist")
+        return []
+
     files = []
-    for scenario_prefix in scenario_prefixes:
-        files.extend(sorted(result_dir.glob(f"{scenario_prefix}-*.json")))
+    if scenario_prefixes:
+        for scenario_prefix in scenario_prefixes:
+            files.extend(sorted(result_dir.glob(f"{scenario_prefix}-*.json")))
+    else:
+        files.extend(sorted(result_dir.glob("*.json")))
     return files
+
+
+def parse_scenario_method(file_path):
+    base = file_path.rsplit("/", 1)[-1]
+    if base.endswith(".json"):
+        base = base[:-5]
+    if "-" not in base:
+        return base, None
+    scenario, method = base.split("-", 1)
+    return scenario, method
 
 
 def parse_scenario_method_run(file_name):
@@ -73,75 +118,64 @@ def parse_scenario_method_run(file_name):
     return scenario, method, None
 
 
-for path in find_result_files(
-    [
-        "scenario_01",
-        "scenario_02",
-        "scenario_03",
-        "scenario_04",
-        "scenario_05",
-        "scenario_06",
-        "scenario_07",
-        "scenario_08",
-    ]
-):
-    scenario, method, run = parse_scenario_method_run(path.name)
-    try:
-        df = pd.read_json(path)
-    except FileNotFoundError:
-        print(path)
-        continue
+for child_folder in CHILD_FOLDERS:
+    scenario_prefixes = SCENARIO_PREFIXES.get(child_folder)
+    for path in find_result_files(child_folder, scenario_prefixes):
+        scenario, method, run = parse_scenario_method_run(path.name)
+        try:
+            df = pd.read_json(path)
+        except FileNotFoundError:
+            print(path)
+            continue
 
-    for key in nested_keys:
-        df[key] = df["proximity_metrics"].apply(lambda x: x.get(key))
-        df[f"proximity_all-{key}"] = df["proximity_metrics_all"].apply(
-            lambda x: average_metric(list(x.values()), key)
-        )
-
-    if "CLEAR" in path.name:
-        df["evaluation_valid"] = df["evaluation_valid"].astype(int)
-    else:
-        df["evaluation_valid"] = 1
-
-    try:
-        df["n_changes"] = df["edits"].apply(
-            lambda x: sum(
-                check_edit(edit, threshold=node_feat_edit_threshold)
-                for edit in parse_edits(x)
+        for key in nested_keys:
+            if key in df.columns:
+                print(
+                    f"Skipping key '{key}' in file {path} because it is already a column"
+                )
+                continue
+            df[key] = df["proximity_metrics"].apply(
+                lambda x: x.get(key) if x else float("nan")
             )
-        )
-    except KeyError:
-        df["n_changes"] = float("nan")
+            df[f"proximity_all-{key}"] = df["proximity_metrics_all"].apply(
+                lambda x: average_metric(list(x.values()), key) if x else float("nan")
+            )
 
-    run_data.append(
-        {
-            "scenario": scenario,
-            "method": method,
-            "run": run,
-            "df": df,
-        }
-    )
+        df.fillna({"evaluation_valid": 1.0}, inplace=True)
+        df["evaluation_valid"] = df["evaluation_valid"].astype(float)
+
+        try:
+            df["n_changes"] = df["edits"].apply(
+                lambda x: sum(
+                    check_edit(edit, threshold=node_feat_edit_threshold)
+                    for edit in parse_edits(x)
+                )
+                if isinstance(x, str)
+                else float("nan")
+            )
+        except KeyError:
+            df["n_changes"] = float("nan")
+
+        run_data.append(
+            {
+                "scenario": scenario,
+                "method": method,
+                "run": run,
+                "df": df,
+            }
+        )
 
 
 # %%
 # Table with mean (std) for different metrics
 # scenario (scenario_prefix) | method (map file after scenario_prefix (e.g. hetero-node)) | validity (evaluation_valid, None=1) | proximity_x | proximity_a | proximity_all-proximity_x | proximity_all-proximity_a |
-def parse_scenario_method(file_path):
-    base = file_path.rsplit("/", 1)[-1]
-    if base.endswith(".json"):
-        base = base[:-5]
-    if "-" not in base:
-        return base, None
-    scenario, method = base.split("-", 1)
-    return scenario, method
-
-
 def format_metric(series):
     mean = series.mean()
     if pd.isna(mean):
         return None
     std = series.std(ddof=0)
-    return f"{mean:.2f} ({std:.2f})"
+    std_str = f"({std:.2f})" if len(series) > 1 else ""
+    return f"{mean:.2f}" + std_str
 
 
 def build_summary_dataframe(run_data):
@@ -259,15 +293,17 @@ def summary_df_to_latex(df):
 
     header = "scenario & method & validity & n_changes & proximity_x & proximity_a & proximity_all-proximity_x & proximity_all-proximity_a \\\\"
     lines = ["\\begin{tabular}{cl||rrrrrr}", "\\toprule", header]
-    scenario_number = 0
+    scenario = ""
     for _, row in latex_df.iterrows():
-        scenario_number_prev = scenario_number
-        scenario_number = int(row["scenario"].replace("scenario_", ""))
-        if scenario_number != scenario_number_prev:
+        scenario_prev = scenario
+        scenario = row["scenario"]
+        if "scenario_" in scenario:
+            scenario = scenario.replace("scenario_", "")
+        if scenario != scenario_prev:
             lines.append("\\hline")
 
         cells = [
-            str(scenario_number),
+            str(scenario),
             str(row["method"]),
             str(row["validity"]),
             str(row["n_changes"]),

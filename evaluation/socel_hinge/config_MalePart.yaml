@@ -1,6 +1,7 @@
 dataset:
   path_ocel: "data/socel_hinge.json"
   path_dataset: "data/dataset-pe-MalePart.pt"
+  path_labels: "data/labels-MalePart.json"
   path_metadata: "data/metadata-pe-MalePart.json"
   exclude_attributes:
     - "ocel:eid"
@@ -9,6 +10,7 @@ dataset:
     - "ocel:type"
   normalize: True
   one_hot_encoding: True
+  add_reverse_edges: True
 
 process_execution:
   viewpoint: "MalePart"
@@ -24,17 +26,31 @@ process_execution:
 
 gnn:
   path_model: "data/model-pe-MalePart.pth"
-  num_layers: 1
+  homogeneous: True
+  num_layers: 2
   batch_size: 10
-  dropout: 0.1
+  dropout: 0.3
   n_epochs: 100
-  start_patience: 25
-  learning_rate: 0.01
+  start_patience: 50
+  learning_rate: 0.001
 
 counterfactual:
-  viewpoint_event_id: "e_checkMale_2906>true"
-  depth_first: "node"
+  # viewpoint_id: "e_checkMale_2906>true"
+  viewpoint_label: False
+  # depth_first: "attribute"
   num_bins: 2
   max_change_size: 3
   node_importance_threshold: 0.01
   attr_importance_threshold: 0.1
+
+counterfactual_graphcfe:
+  path_model: "data/model_graphcfe-MalePart.pth"
+  vae_type: "graphVAE"
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 300
+  learning_rate: 0.01
+  patience: 25

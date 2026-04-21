@@ -99,3 +99,60 @@ def test_to_homogeneous_data_pads_missing_node_types():
     assert data.x.shape == (1, 2)
     assert data.edge_index.shape[1] == 0
     assert feat_labels["OBJECT"] == ["value", "kind"]
+
+
+def test_to_homogeneous_data_unique_type_attribute_columns():
+    graph = Graph()
+    graph.add_node(
+        1,
+        attr={
+            "type": "OBJECT",
+            "ocel:type": "OBJECT",
+            "value": 2.0,
+            "kind": "B",
+        },
+    )
+    graph.add_node(
+        2,
+        attr={
+            "type": "EVENT",
+            "ocel:activity": "EVENT",
+            "duration": 3.0,
+            "activity": "x",
+        },
+    )
+
+    node_num_keys = {
+        "OBJECT": {"OBJECT": {"value": (0.0, 2.0)}},
+        "EVENT": {"EVENT": {"duration": (0.0, 5.0)}},
+    }
+    node_cat_keys = {
+        "OBJECT": {"OBJECT": {"kind": ["A", "B"]}},
+        "EVENT": {"EVENT": {"activity": ["x", "y"]}},
+    }
+
+    hetero_data, node_types, edge_types, _, feat_labels, _ = build_hetero_data(
+        graph=graph,
+        node_num_keys=node_num_keys,
+        node_cat_keys=node_cat_keys,
+        object_type_col="ocel:type",
+        event_activity_col="ocel:activity",
+        viewpoint="OBJECT",
+        add_reverse_edges=False,
+        normalize=False,
+        one_hot_encoding=False,
+    )
+
+    data = to_homogeneous_data(
+        hetero_data,
+        node_num_keys=node_num_keys,
+        node_cat_keys=node_cat_keys,
+        node_types=["OBJECT", "EVENT"],
+        one_hot_encoding=False,
+        unique_node_type_attribute_columns=True,
+    )
+
+    assert data.x.shape == (2, 4)
+    rows = [row.tolist() for row in data.x]
+    assert [2.0, 1.0, 0.0, 0.0] in rows
+    assert [0.0, 0.0, 3.0, 0.0] in rows

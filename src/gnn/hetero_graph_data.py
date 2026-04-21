@@ -30,9 +30,7 @@ def construct_graph_dict(
 
     # Collect nodes per type
     node_id_to_type = {}
-    type_to_nodes = {
-        t: [] for t in event_object_types
-    }
+    type_to_nodes = {t: [] for t in event_object_types}
     for node, attr in graph.nodes(data="attr"):
         t = None
         if attr.get("type") == node_type_object:
@@ -54,8 +52,32 @@ def construct_graph_dict(
         nodes = type_to_nodes.get(t, [])
         type_to_idx[t] = {n: i for i, n in enumerate(nodes)}
         feat_values = []
-        feat_labels = []
         node_labels = []
+
+        if t in node_num_keys.get(node_type_object, {}):
+            node_type_key = node_type_object
+        elif t in node_num_keys.get(node_type_event, {}):
+            node_type_key = node_type_event
+        else:
+            node_type_key = None
+
+        if node_type_key is not None:
+            num_spec = node_num_keys[node_type_key].get(t, {})
+            if isinstance(num_spec, dict):
+                num_keys = list(num_spec.keys())
+            else:
+                num_keys = list(num_spec)
+
+            feat_labels = num_keys.copy()
+            cat_info = node_cat_keys.get(node_type_key, {}).get(t, {})
+            if one_hot_encoding:
+                for col, unique_vals in cat_info.items():
+                    feat_labels.extend([f"{col}[{v}]" for v in unique_vals])
+            else:
+                feat_labels.extend(cat_info.keys())
+        else:
+            feat_labels = []
+
         for n in nodes:
             attr = graph.nodes[n].get("attr") or {}
             node_type = attr["type"]
@@ -89,8 +111,6 @@ def construct_graph_dict(
                 else:
                     node_feats.append(v)
 
-            feat_labels.extend(num_keys.copy())
-
             # Encode categorical attributes by their index in the provided unique-values list
             cat_info = node_cat_keys.get(node_type, {}).get(t, {})
             for col, unique_vals in cat_info.items():
@@ -118,10 +138,8 @@ def construct_graph_dict(
                         if idx != -1:
                             col_x[idx] = 1
                         node_feats.extend(col_x)
-                        feat_labels.extend([f"{col}[{v}]" for v in unique_vals])
                     else:
                         node_feats.append(idx)
-                        feat_labels.append(col)
 
                 except Exception as inner_e:
                     raise RuntimeError(
@@ -273,10 +291,22 @@ def _pad_node_features_to_width(
     node_types: List[str],
     feature_dim: int,
 ) -> None:
+    # Infer device from existing tensors in hetero_data
+    device = None
+    for node_type in hetero_data.node_types:
+        if (
+            hasattr(hetero_data[node_type], "x")
+            and hetero_data[node_type].x is not None
+        ):
+            device = hetero_data[node_type].x.device
+            break
+    if device is None:
+        device = torch.device("cpu")
+
     for node_type in node_types:
         if node_type not in hetero_data.node_types:
             hetero_data[node_type].x = torch.zeros(
-                (0, feature_dim), dtype=torch.float32
+                (0, feature_dim), dtype=torch.float32, device=device
             )
             continue
 
@@ -286,32 +316,93 @@ def _pad_node_features_to_width(
             hetero_data[node_type].x = torch.cat([x, pad], dim=1)
 
 
+def _pad_node_features_to_unique_width(
+    hetero_data: HeteroData,
+    node_types: List[str],
+    feature_dim_by_type: Dict[str, int],
+    global_feature_dim: int,
+) -> None:
+    # Infer device from existing tensors in hetero_data
+    device = None
+    for node_type in hetero_data.node_types:
+        if (
+            hasattr(hetero_data[node_type], "x")
+            and hetero_data[node_type].x is not None
+        ):
+            device = hetero_data[node_type].x.device
+            break
+    if device is None:
+        device = torch.device("cpu")
+
+    offset = 0
+    for node_type in node_types:
+        width = feature_dim_by_type[node_type]
+        if node_type not in hetero_data.node_types:
+            hetero_data[node_type].x = torch.zeros(
+                (0, global_feature_dim), dtype=torch.float32, device=device
+            )
+            offset += width
+            continue
+
+        x = hetero_data[node_type].x
+        if x.size(1) < width:
+            pad = x.new_zeros((x.size(0), width - x.size(1)))
+            x = torch.cat([x, pad], dim=1)
+        elif x.size(1) > width:
+            raise ValueError(
+                f"Feature dimension for node type '{node_type}' is larger than expected. "
+                f"expected={width}, found={x.size(1)}"
+            )
+
+        full = x.new_zeros((x.size(0), global_feature_dim))
+        full[:, offset : offset + width] = x
+        hetero_data[node_type].x = full
+        offset += width
+
+
 def to_homogeneous_data(
     hetero_data: HeteroData,
     node_num_keys: Dict[str, Dict[str, Dict[str, Tuple[float, float]]]],
     node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
     node_types: List[str] | None = None,
     one_hot_encoding: bool = False,
+    unique_node_type_attribute_columns: bool = False,
 ) -> Data:
     all_node_types = (
-        list(node_types)
-        if node_types is not None
-        else list(hetero_data.node_types)
+        list(node_types) if node_types is not None else list(hetero_data.node_types)
     )
     if not all_node_types:
         raise ValueError("No node types provided for homogeneous conversion")
 
-    feature_dim = max(
-        _feature_dimension_for_type(
-            type_name=node_type,
-            node_num_keys=node_num_keys,
-            node_cat_keys=node_cat_keys,
-            one_hot_encoding=one_hot_encoding,
+    if unique_node_type_attribute_columns:
+        feature_dim_by_type = {
+            node_type: _feature_dimension_for_type(
+                type_name=node_type,
+                node_num_keys=node_num_keys,
+                node_cat_keys=node_cat_keys,
+                one_hot_encoding=one_hot_encoding,
+            )
+            for node_type in all_node_types
+        }
+        total_feature_dim = sum(feature_dim_by_type.values())
+        _pad_node_features_to_unique_width(
+            hetero_data,
+            all_node_types,
+            feature_dim_by_type,
+            total_feature_dim,
         )
-        for node_type in all_node_types
-    )
+    else:
+        feature_dim = max(
+            _feature_dimension_for_type(
+                type_name=node_type,
+                node_num_keys=node_num_keys,
+                node_cat_keys=node_cat_keys,
+                one_hot_encoding=one_hot_encoding,
+            )
+            for node_type in all_node_types
+        )
 
-    _pad_node_features_to_width(hetero_data, all_node_types, feature_dim)
+        _pad_node_features_to_width(hetero_data, all_node_types, feature_dim)
 
     data = hetero_data.to_homogeneous()
     if hasattr(hetero_data, "y"):
@@ -335,8 +426,11 @@ def build_data(
     path_dataset: str = None,
     normalize: bool = False,
     one_hot_encoding: bool = False,
+    unique_node_type_attribute_columns: bool = False,
     node_types: List[str] | None = None,
-) -> Tuple[Data, Set[str], Set[str], List[str], Dict[str, List[str]], Dict[str, List[str]]]:
+) -> Tuple[
+    Data, Set[str], Set[str], List[str], Dict[str, List[str]], Dict[str, List[str]]
+]:
     hetero_data, type_names, edge_types, y_nodes, feat_label_dict, node_label_dict = (
         build_hetero_data(
             graph=graph,
@@ -358,6 +452,7 @@ def build_data(
         node_cat_keys=node_cat_keys,
         node_types=node_types or sorted(type_names),
         one_hot_encoding=one_hot_encoding,
+        unique_node_type_attribute_columns=unique_node_type_attribute_columns,
     )
 
     if path_dataset:

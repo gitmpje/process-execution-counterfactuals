@@ -102,6 +102,7 @@ def get_nodes_by_importance(
             metadata.node_cat_keys,
             metadata.node_types,
             metadata.one_hot_encoding,
+            metadata.unique_node_type_attribute_columns,
         )
         orig_node_types = hetero_data.node_types  # str list, index = type int
         node_type_tensor = homo_data.node_type  # shape [num_nodes]
@@ -237,6 +238,7 @@ def get_feature_labels_by_importance(
             metadata.node_cat_keys,
             metadata.node_types,
             metadata.one_hot_encoding,
+            metadata.unique_node_type_attribute_columns,
         )
         orig_node_types = hetero_data.node_types  # str list, index = type int
         node_type_tensor = homo_data.node_type  # shape [num_nodes]

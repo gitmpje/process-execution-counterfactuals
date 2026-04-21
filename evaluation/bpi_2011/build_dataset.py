@@ -34,6 +34,7 @@ path_metadata = dataset_cfg["path_metadata"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
 normalize = dataset_cfg.get("normalize", False)
 one_hot_encoding = dataset_cfg.get("one_hot_encoding", False)
+add_reverse_edges = dataset_cfg.get("add_reverse_edges", False)
 
 # Process execution
 process_execution_cfg = cfg["process_execution"]
@@ -112,7 +113,7 @@ for idx, obj in enumerate(viewpoint_objects):
         object_type_col=ocel.object_type_column,
         event_activity_col=ocel.event_activity,
         viewpoint=viewpoint,
-        add_reverse_edges=False,
+        add_reverse_edges=add_reverse_edges,
         normalize=normalize,
         one_hot_encoding=one_hot_encoding,
     )
@@ -146,6 +147,7 @@ metadata = Metadata(
     feat_label_dict=feat_label_dict,
     normalized=normalize,
     one_hot_encoding=one_hot_encoding,
+    add_reverse_edges=add_reverse_edges,
 )
 
 with open(path_metadata, "w") as f:
@@ -222,3 +224,13 @@ for data in dataset:
 
 # Overwrite dataset
 tsave(dataset, path_dataset)
+
+# %% Store labels per viewpoint object
+path_labels = dataset_cfg.get("path_labels")
+if path_labels:
+    label_dict = {"viewpoint_object_labels": {}}
+    for i, data in enumerate(dataset):
+        label_dict["viewpoint_object_labels"][viewpoint_objects[i]] = data.y
+
+    with open(path_labels, "w") as f:
+        label_dict = json.dump(label_dict, f, indent=2)

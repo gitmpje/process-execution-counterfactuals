@@ -108,7 +108,7 @@ class TreeSearchCounterFactual:
                 action_set_prime.set_change_value(action, change_value)
 
                 # Skip if this candidate conflicts with existing modifications
-                if not action_set_prime.is_change_allowed(action, change_value):
+                if not action_set_prime.is_change_allowed(action, change_value, process_execution):
                     self.logger.debug("Not allowed: %s", action_set_prime)
                     continue
 

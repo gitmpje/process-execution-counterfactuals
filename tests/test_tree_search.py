@@ -117,6 +117,10 @@ def test_action_size_objective_and_apply(simple_process_execution, numeric_actio
 
 
 def test_action_set_conflict_prevents_substitution_on_deleted_node():
+    p = ProcessExecution()
+    p.add_node("n1", attr={"type": "EVENT"})
+    p.add_node("n2", attr={"type": "EVENT"})
+
     a = ActionSet()
     delete_action = EventNodeDeletion(deletion_options=[["n1"]])
     a.set_change_value(delete_action, ["n1"])
@@ -127,10 +131,13 @@ def test_action_set_conflict_prevents_substitution_on_deleted_node():
         substitution_events=[("n2", {"type": "EVENT"})],
     )
 
-    assert not a.is_change_allowed(subst_action, ("n2", {"type": "EVENT"}))
+    assert not a.is_change_allowed(subst_action, ("n2", {"type": "EVENT"}), p)
 
 
 def test_action_set_conflict_prevents_event_insertion_on_deleted_event():
+    p = ProcessExecution()
+    p.add_node("e1", attr={"type": "EVENT"})
+
     a = ActionSet()
     delete_action = EventNodeDeletion(deletion_options=[["e1"]])
     a.set_change_value(delete_action, ["e1"])
@@ -141,10 +148,13 @@ def test_action_set_conflict_prevents_event_insertion_on_deleted_event():
         object_ids=[],
     )
 
-    assert not a.is_change_allowed(insertion, {"type": "EVENT", "ocel:activity": "new"})
+    assert not a.is_change_allowed(insertion, {"type": "EVENT", "ocel:activity": "new"}, p)
 
 
 def test_action_set_conflict_prevents_object_insertion_on_deleted_event():
+    p = ProcessExecution()
+    p.add_node("e2", attr={"type": "EVENT"})
+
     a = ActionSet()
     delete_action = EventNodeDeletion(deletion_options=[["e2"]])
     a.set_change_value(delete_action, ["e2"])
@@ -154,7 +164,7 @@ def test_action_set_conflict_prevents_object_insertion_on_deleted_event():
         object_data_options=[{"type": "OBJECT", "ocel:type": "X"}],
     )
 
-    assert not a.is_change_allowed(insertion, {"type": "OBJECT", "ocel:type": "X"})
+    assert not a.is_change_allowed(insertion, {"type": "OBJECT", "ocel:type": "X"}, p)
 
 
 def test_event_insertion_apply_undo():

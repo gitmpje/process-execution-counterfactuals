@@ -25,17 +25,12 @@ from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 from gnn.utils import Metadata
 from process_execution.process_execution import extract_process_execution
 
-from utils import replace_scenario_prefix
+from utils import clean_ocel_dataset
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
-
-# Replace $SCENARIO_PREFIX tokens in config
-SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX", "scenario_01")
-if SCENARIO_PREFIX is not None:
-    cfg = replace_scenario_prefix(cfg, SCENARIO_PREFIX)
 
 # Dataset
 dataset_cfg = cfg["dataset"]
@@ -69,7 +64,7 @@ viewpoint_label = counterfactual_cfg["viewpoint_label"]
 
 # Counterfactual GraphCFE
 graphcfe_cfg = cfg["counterfactual_graphcfe"]
-path_graphcfe_model = graphcfe_cfg.get("path_model")
+path_graphcfe_model = graphcfe_cfg["path_model"]
 graphcfe_args = SimpleNamespace(
     dim_h=graphcfe_cfg["dim_h"],
     dim_z=graphcfe_cfg["dim_z"],
@@ -84,6 +79,7 @@ metadata = Metadata.from_dict(metadata_dict)
 
 # %% Load OCEL
 ocel = pm4py.read_ocel2_json(path_ocel)
+ocel = clean_ocel_dataset(ocel)
 
 # Convert timestamp to epoch
 ocel.events["epoch"] = ocel.events["ocel:timestamp"].astype(int)
@@ -126,37 +122,39 @@ def process_outcome(p: Graph) -> bool:
     Returns:
         float: The predicted value.
     """
-    try:
-        data, _, _, _, _, _ = build_hetero_data(
-            graph=p,
-            node_num_keys=metadata.node_num_keys,
-            node_cat_keys=metadata.node_cat_keys,
-            object_type_col=ocel.object_type_column,
-            event_activity_col=ocel.event_activity,
-            viewpoint=metadata.viewpoint,
-            normalize=metadata.normalized,
-            one_hot_encoding=metadata.one_hot_encoding,
-            add_reverse_edges=metadata.add_reverse_edges,
+    hetero_data, _, _, _, _, _ = build_hetero_data(
+        graph=p,
+        node_num_keys=metadata.node_num_keys,
+        node_cat_keys=metadata.node_cat_keys,
+        object_type_col=ocel.object_type_column,
+        event_activity_col=ocel.event_activity,
+        viewpoint=metadata.viewpoint,
+        normalize=metadata.normalized,
+        one_hot_encoding=metadata.one_hot_encoding,
+        add_reverse_edges=metadata.add_reverse_edges,
+    )
+
+    if homogeneous:
+        data = to_homogeneous_data(
+            hetero_data,
+            metadata.node_num_keys,
+            metadata.node_cat_keys,
+            metadata.node_types,
+            metadata.one_hot_encoding,
+            metadata.unique_node_type_attribute_columns,
         )
-
+        batch = torch.zeros(
+            data.num_nodes if data.num_nodes else 0,
+            dtype=torch.long,
+            device=device,
+        )
         data = data.to(device)
+        out = model(data.x, data.edge_index, batch)
+    else:
+        data = hetero_data.to(device)
 
-        if homogeneous:
-            data = to_homogeneous_data(
-                data,
-                metadata.node_num_keys,
-                metadata.node_cat_keys,
-                metadata.node_types,
-                metadata.one_hot_encoding,
-                metadata.unique_node_type_attribute_columns,
-            )
-            batch = torch.zeros(
-                data.num_nodes if data.num_nodes else 0,
-                dtype=torch.long,
-                device=device,
-            )
-            out = model(data.x, data.edge_index, batch)
-        else:
+        try:
+            # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
             batch_dict = {
                 node_type: torch.zeros(
                     data[node_type].num_nodes if data[node_type].num_nodes else 0,
@@ -166,10 +164,11 @@ def process_outcome(p: Graph) -> bool:
                 for node_type in metadata.node_types
             }
             out = model(data.x_dict, data.edge_index_dict, batch_dict)
-    except Exception as e:
-        print(f"Error occurred while processing graph: {e}")
-        print(data)
-        raise e
+
+        except Exception as e:
+            print(f"Error occurred while processing graph: {e}")
+            print(data)
+            raise e
 
     return bool(out.argmax(dim=-1).cpu().item())
 
@@ -202,8 +201,9 @@ graphcfe_model = train_graphcfe_model(
     device=device,
 )
 
-if path_graphcfe_model:
-    torch.save(graphcfe_model, path_graphcfe_model)
+torch.save(graphcfe_model, path_graphcfe_model)
+
+# graphcfe_model = torch.load(path_graphcfe_model, weights_only=False)
 
 # %%
 # Determine viewpoint id(s)
@@ -300,8 +300,11 @@ for viewpoint_id, record in viewpoint_data_dict.items():
         }
     )
 
-run_id = os.getenv("RUN_ID")
-with open(
-    f"results/{SCENARIO_PREFIX}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
-) as f:
-    json.dump(results, f)
+if results:
+    run_id = os.getenv("RUN_ID")
+    file_name = os.path.basename(os.path.dirname(__file__))
+    with open(
+        f"results/{file_name}{'_' + config_file.split('/')[-1].split('.')[0]}-CLEAR{f'-{run_id}' if run_id else ''}.json",
+        "w",
+    ) as f:
+        json.dump(results, f)

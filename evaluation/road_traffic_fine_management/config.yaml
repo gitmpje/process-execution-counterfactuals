@@ -1,6 +1,8 @@
 dataset:
   path_xes: "data/Road_Traffic_Fine_Management_Process.xes.gz"
+  path_ocel: "data/Road_Traffic_Fine_Management_Process.json"
   path_dataset: "data/dataset-pe.pt"
+  path_labels: "data/labels.json"
   path_metadata: "data/metadata-pe.json"
   path_sample: "data/sample_objects.txt"
   exclude_attributes:
@@ -16,6 +18,7 @@ process_execution:
 
 gnn:
   path_model: "data/model-pe.pth"
+  homogeneous: True
   num_layers: 1
   batch_size: 10
   dropout: 0.1
@@ -24,9 +27,22 @@ gnn:
   learning_rate: 0.01
 
 counterfactual:
-  viewpoint_object_id: "A10068"
-  depth_first: "node"
+  # viewpoint_id: "A10068"
+  viewpoint_label: False
+  depth_first: "attribute"
   num_bins: 2
   max_change_size: 3
   node_importance_threshold: 0.01
-  attr_importance_threshold: 0.05
+  attr_importance_threshold: 0.1
+
+counterfactual_graphcfe:
+  path_model: "data/model_graphcfe.pth"
+  vae_type: "graphVAE"
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 300
+  learning_rate: 0.01
+  patience: 25

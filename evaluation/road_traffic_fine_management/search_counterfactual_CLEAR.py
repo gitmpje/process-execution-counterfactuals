@@ -5,7 +5,6 @@ import pm4py
 import torch
 import yaml
 
-from copy import deepcopy
 from networkx import Graph
 from random import seed
 from types import SimpleNamespace
@@ -23,19 +22,11 @@ from evaluation.utils import to_dense, hetero_to_homogeneous_data
 
 from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
 from gnn.utils import Metadata
-from process_execution.process_execution import extract_process_execution
-
-from utils import replace_scenario_prefix
 
 ### Configuration ###
 config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
-
-# Replace $SCENARIO_PREFIX tokens in config
-SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX", "scenario_01")
-if SCENARIO_PREFIX is not None:
-    cfg = replace_scenario_prefix(cfg, SCENARIO_PREFIX)
 
 # Dataset
 dataset_cfg = cfg["dataset"]
@@ -50,8 +41,6 @@ add_reverse_edges = dataset_cfg.get("add_reverse_edges", False)
 # Process execution
 process_execution_cfg = cfg["process_execution"]
 viewpoint = process_execution_cfg["viewpoint"]
-process_execution_object_types = process_execution_cfg["object_types"]
-process_execution_target_activity = process_execution_cfg.get("target_activity")
 trace_backward = process_execution_cfg.get("trace_backward", False)
 
 # GNN
@@ -66,10 +55,11 @@ seed(random_seed)
 # Counterfactual search
 counterfactual_cfg = cfg["counterfactual"]
 viewpoint_label = counterfactual_cfg["viewpoint_label"]
+viewpoint_id = counterfactual_cfg.get("viewpoint_id")
 
 # Counterfactual GraphCFE
 graphcfe_cfg = cfg["counterfactual_graphcfe"]
-path_graphcfe_model = graphcfe_cfg.get("path_model")
+path_graphcfe_model = graphcfe_cfg["path_model"]
 graphcfe_args = SimpleNamespace(
     dim_h=graphcfe_cfg["dim_h"],
     dim_z=graphcfe_cfg["dim_z"],
@@ -84,9 +74,6 @@ metadata = Metadata.from_dict(metadata_dict)
 
 # %% Load OCEL
 ocel = pm4py.read_ocel2_json(path_ocel)
-
-# Convert timestamp to epoch
-ocel.events["epoch"] = ocel.events["ocel:timestamp"].astype(int)
 
 # %% Convert OCEL to Networkx graph
 ocel_nx = pm4py.convert_ocel_to_networkx(ocel)
@@ -201,44 +188,43 @@ graphcfe_model = train_graphcfe_model(
     patience=graphcfe_cfg.get("patience", 10),
     device=device,
 )
-
-if path_graphcfe_model:
-    torch.save(graphcfe_model, path_graphcfe_model)
+torch.save(graphcfe_model, path_graphcfe_model)
 
 # %%
 # Determine viewpoint id(s)
+with open(path_labels, "r") as f:
+    labels_data = json.load(f)
 
+# Determine viewpoint id(s)
 viewpoint_ids = []
-if counterfactual_cfg.get("viewpoint_id"):
-    viewpoint_ids.append(counterfactual_cfg.get("viewpoint_id"))
+if counterfactual_cfg.get("viewpoint_id") is not None:
+    viewpoint_ids.append(counterfactual_cfg["viewpoint_id"])
+    visualize = True
 else:
     with open(path_labels, "r") as f:
         labels_data = json.load(f)
-    for event_id, event_label in labels_data["viewpoint_event_labels"].items():
-        if event_label == viewpoint_label:
-            viewpoint_ids.append(event_id)
+    for object_id, label in labels_data["viewpoint_object_labels"].items():
+        if label == viewpoint_label:
+            viewpoint_ids.append(object_id)
 
 if not viewpoint_ids:
     raise ValueError(
-        f"No event found in {path_labels} with actual label {viewpoint_label}"
+        f"No viewpoint IDs found in {path_labels} with actual label {viewpoint_label}"
     )
 
 # %% Select graph to explain
 # Extract target process execution
 viewpoint_data_dict = {}
 for viewpoint_id in viewpoint_ids:
-    process_execution = deepcopy(
-        extract_process_execution(
-            ocel_nx,
-            viewpoint_id,
-            object_types=process_execution_object_types,
-            target_activity_type=process_execution_target_activity,
-            backward=trace_backward,
-        )
-    )
+    print("Viewpoint object:", viewpoint_id)
 
-    if process_outcome(process_execution) != viewpoint_label:
-        print(f"Skipping {viewpoint_id}")
+    events = set([e for e, _ in ocel_nx.in_edges(viewpoint_id)])
+    nodes = events | {viewpoint_id}
+    process_execution = ocel_nx.subgraph(nodes).copy()
+
+    counterfactual_label = not process_outcome(process_execution)
+    if counterfactual_label == viewpoint_label:
+        print(f"Skipping object {viewpoint_id}")
         continue
 
     data, _, _, _, feat_label_dict, node_label_dict = build_hetero_data(
@@ -302,6 +288,6 @@ for viewpoint_id, record in viewpoint_data_dict.items():
 
 run_id = os.getenv("RUN_ID")
 with open(
-    f"results/{SCENARIO_PREFIX}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
+    f"results/road_traffic_fine_management-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
 ) as f:
     json.dump(results, f)

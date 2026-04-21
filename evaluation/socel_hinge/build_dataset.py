@@ -21,7 +21,7 @@ from gnn.utils import (
 from utils import clean_ocel_dataset
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -195,3 +195,13 @@ for data in dataset:
 
 # Overwrite dataset
 tsave(dataset, path_dataset)
+
+# %% Store labels per viewpoint object
+path_labels = dataset_cfg.get("path_labels")
+if path_labels:
+    label_dict = {"viewpoint_event_labels": {}}
+    for i, data in enumerate(dataset):
+        label_dict["viewpoint_event_labels"][viewpoint_events[i]] = data.y
+
+    with open(path_labels, "w") as f:
+        label_dict = json.dump(label_dict, f, indent=2)
