@@ -5,7 +5,7 @@ import torch
 from numpy import inf
 from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
-from torch_geometric.nn import GATConv, global_mean_pool
+from torch_geometric.nn import GATConv, global_max_pool, global_mean_pool
 from typing import Tuple
 
 
@@ -25,6 +25,15 @@ class GATGraphLevel(nn.Module):
 
         self.dropout = dropout
 
+        self.batch_norms = nn.ModuleList(
+            [
+                nn.BatchNorm1d(
+                    hidden_channels * heads if i < num_layers - 1 else hidden_channels
+                )
+                for i in range(num_layers)
+            ]
+        )
+
         self.gat_convs = nn.ModuleList()
         current_in = in_channels
         for i in range(num_layers):
@@ -41,7 +50,14 @@ class GATGraphLevel(nn.Module):
             )
             current_in = hidden_channels if is_last else hidden_channels * heads
 
-        self.lin = nn.Linear(hidden_channels, out_channels)
+        pool_dim = hidden_channels * 2  # if using mean+max concat
+        self.classifier = nn.Sequential(
+            nn.Linear(pool_dim, pool_dim // 2),
+            nn.BatchNorm1d(pool_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(pool_dim // 2, out_channels),
+        )
 
     def forward(self, x, edge_index, batch):
         """
@@ -55,15 +71,18 @@ class GATGraphLevel(nn.Module):
         Returns:
             Graph-level predictions, shape [num_graphs, out_channels]
         """
-        for gat_conv in self.gat_convs:
+        for i, gat_conv in enumerate(self.gat_convs):
             x = gat_conv(x, edge_index)
+            x = self.batch_norms[i](x)
             x = torch.nn.functional.elu(x)
             x = torch.nn.functional.dropout(x, p=self.dropout, training=self.training)
 
         # Pool all node embeddings into one vector per graph.
-        graph_emb = global_mean_pool(x, batch)
+        graph_emb = torch.cat(
+            [global_mean_pool(x, batch), global_max_pool(x, batch)], dim=-1
+        )
 
-        return self.lin(graph_emb)
+        return self.classifier(graph_emb)
 
 
 class GATConvTrainerGraphLevel:

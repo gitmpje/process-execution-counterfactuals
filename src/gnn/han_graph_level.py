@@ -5,7 +5,7 @@ import torch
 from numpy import inf
 from sklearn.metrics import accuracy_score, f1_score
 from torch import nn
-from torch_geometric.nn import HANConv, global_mean_pool
+from torch_geometric.nn import HANConv, global_max_pool, global_mean_pool
 from typing import Dict, List, Tuple, Union
 
 
@@ -26,9 +26,19 @@ class HANGraphLevel(nn.Module):
     ):
         super().__init__()
 
+        self.dropout = dropout
         self.viewpoint = viewpoint
         self.metadata = metadata
         self.pooling_method = pooling_method
+
+        node_types = metadata[0]
+        self.batch_norms = nn.ModuleDict(
+            {
+                f"{node_type}_layer{i}": nn.BatchNorm1d(hidden_channels)
+                for i in range(num_layers)
+                for node_type in node_types
+            }
+        )
 
         self.han_convs = nn.ModuleList()
         current_in = in_channels
@@ -38,17 +48,21 @@ class HANGraphLevel(nn.Module):
                     in_channels=current_in,
                     out_channels=hidden_channels,
                     heads=heads,
-                    dropout=dropout,
+                    dropout=self.dropout,
                     metadata=self.metadata,
                 )
             )
 
-            if isinstance(current_in, dict):
-                # Map each node type to hidden_channels for subsequent layers
-                current_in = {nt: hidden_channels for nt in current_in.keys()}
-            else:
-                current_in = hidden_channels
-        self.lin = nn.Linear(hidden_channels, out_channels)
+            current_in = hidden_channels
+
+        pool_dim = hidden_channels * 2  # if using mean+max concat
+        self.classifier = nn.Sequential(
+            nn.Linear(pool_dim, pool_dim // 2),
+            nn.BatchNorm1d(pool_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(pool_dim // 2, out_channels),
+        )
 
     def forward(self, x_dict, edge_index_dict, batch_dict):
         """
@@ -62,16 +76,24 @@ class HANGraphLevel(nn.Module):
         Returns:
             Graph-level predictions (one per graph in batch)
         """
-        for han_conv in self.han_convs:
+        for i, han_conv in enumerate(self.han_convs):
             x_dict = han_conv(x_dict, edge_index_dict)
 
-            # HANConv may return `None` for node types with no nodes or edges.
-            # Substitute an empty tensor matching the conv's output dimension.
             out_dim = han_conv.out_channels
             device = next(han_conv.parameters()).device
-            for nt, v in list(x_dict.items()):
-                if v is None:
-                    x_dict[nt] = torch.zeros((0, out_dim), device=device)
+            x_dict_clean = {}
+            for node_type, x in x_dict.items():
+                if x is None or x.numel() == 0:
+                    x_dict_clean[node_type] = torch.zeros((0, out_dim), device=device)
+                else:
+                    bn_key = f"{node_type}_layer{i}"
+                    x = self.batch_norms[bn_key](x)
+                    x = torch.nn.functional.elu(x)
+                    x = torch.nn.functional.dropout(
+                        x, p=self.dropout, training=self.training
+                    )
+                    x_dict_clean[node_type] = x
+            x_dict = x_dict_clean
 
         # Determine the expected batch size (number of graphs) across all node types.
         batch_size = 0
@@ -87,18 +109,25 @@ class HANGraphLevel(nn.Module):
             if x is None or x.numel() == 0:
                 continue
 
-            # Global pool result should contain one row per graph even
-            # if some graphs have no nodes of this type.
-            pooled.append(global_mean_pool(x, batch_dict[node_type], size=batch_size))
+            # Global pool results
+            pooled.append(
+                torch.cat(
+                    [
+                        global_mean_pool(x, batch_dict[node_type], size=batch_size),
+                        global_max_pool(x, batch_dict[node_type], size=batch_size),
+                    ],
+                    dim=-1,
+                )
+            )
 
         if pooled:
             # Average over node types
             graph_emb = torch.stack(pooled).mean(dim=0)
         else:
             # If no valid node-type embeddings were produced fall back to a zero vector.
-            graph_emb = torch.zeros(batch_size, self.lin.in_features)
+            graph_emb = torch.zeros(batch_size, self.classifier[0].in_features)
 
-        out = self.lin(graph_emb)
+        out = self.classifier(graph_emb)
 
         return out
 
