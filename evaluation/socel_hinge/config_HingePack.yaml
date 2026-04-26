@@ -10,6 +10,7 @@ dataset:
     - "ocel:type"
   normalize: True
   one_hot_encoding: True
+  add_reverse_edges: True
 
 process_execution:
   viewpoint: "HingePack"
@@ -28,21 +29,24 @@ process_execution:
 gnn:
   path_model: "data/model-pe-HingePack.pth"
   homogeneous: True
-  num_layers: 2
-  batch_size: 10
+  num_layers: 5
+  batch_size: 20
   dropout: 0.3
-  n_epochs: 100
-  start_patience: 50
-  learning_rate: 0.001
+  n_epochs: 200
+  start_patience: 80
+  learning_rate: 0.01
+  random_seed: 42
 
 counterfactual:
+  # verbose: True
   # viewpoint_id: "e_packhinges_142"
   viewpoint_label: False
   depth_first: "node"
   num_bins: 2
   max_change_size: 3
-  node_importance_threshold: 0.01
-  attr_importance_threshold: 0.1
+  node_importance_threshold: 0.0001
+  attr_importance_threshold: 0.01
+  # category_importance_threshold: 0.01
 
 counterfactual_graphcfe:
   path_model: "data/model_graphcfe-HingePack.pth"
@@ -52,6 +56,6 @@ counterfactual_graphcfe:
   dropout: 0.1
   disable_u: False
   batch_size: 10
-  n_epochs: 300
+  n_epochs: 200
   learning_rate: 0.01
-  patience: 25
+  patience: 40

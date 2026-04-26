@@ -86,11 +86,12 @@ model.eval()
 
 dataset = torch.load(path_dataset, weights_only=False)
 
-homogeneous_dataset = []
 labels = []
-for data in dataset:
-    homogeneous_dataset.append(
-        to_homogeneous_data(
+if homogeneous:
+    homogeneous_dataset = []
+    while len(dataset) > 0:
+        data = dataset.pop(0)
+        _data = to_homogeneous_data(
             data,
             metadata.node_num_keys,
             metadata.node_cat_keys,
@@ -98,10 +99,15 @@ for data in dataset:
             metadata.one_hot_encoding,
             metadata.unique_node_type_attribute_columns,
         )
-    )
-    labels.append(torch.tensor([data.y], dtype=torch.long))
+        _data.y = data.y
+        labels.append(torch.tensor([data.y], dtype=torch.long))
+        del data
+        homogeneous_dataset.append(_data)
+else:
+    raise NotImplementedError("Heterogeneous dataset not implemented for GraphCFE yet")
 
 stats = GraphCFEDatasetStats.from_dataset(homogeneous_dataset, labels)
+print("Prepared dataset stats:", stats)
 
 
 @torch.no_grad()
@@ -174,7 +180,9 @@ train_features, train_adjs, train_ys, train_us = build_graphcfe_training_tensors
     labels,
     stats,
     device,
+    sample_size=graphcfe_cfg.get("sample_size", None),
 )
+print("Prepared training tensors")
 
 graphcfe_model = train_graphcfe_model(
     graphcfe_model,
@@ -189,6 +197,8 @@ graphcfe_model = train_graphcfe_model(
     device=device,
 )
 torch.save(graphcfe_model, path_graphcfe_model)
+
+graphcfe_model = torch.load(path_graphcfe_model, weights_only=False)
 
 # %%
 # Determine viewpoint id(s)
@@ -216,7 +226,7 @@ if not viewpoint_ids:
 # Extract target process execution
 viewpoint_data_dict = {}
 for viewpoint_id in viewpoint_ids:
-    print("Viewpoint object:", viewpoint_id)
+    print("Viewpoint id:", viewpoint_id)
 
     events = set([e for e, _ in ocel_nx.in_edges(viewpoint_id)])
     nodes = events | {viewpoint_id}
@@ -224,7 +234,7 @@ for viewpoint_id in viewpoint_ids:
 
     counterfactual_label = not process_outcome(process_execution)
     if counterfactual_label == viewpoint_label:
-        print(f"Skipping object {viewpoint_id}")
+        print(f"Skipping {viewpoint_id}")
         continue
 
     data, _, _, _, feat_label_dict, node_label_dict = build_hetero_data(
@@ -244,8 +254,17 @@ for viewpoint_id in viewpoint_ids:
 # %% GraphCFE
 print("counterfactual_label =", not viewpoint_label)
 
+
+def save_results(results):
+    run_id = os.getenv("RUN_ID")
+    file_name = os.path.basename(os.path.dirname(__file__))
+    with open(f"results/bpi_2011-CLEAR{f'-{run_id}' if run_id else ''}.json", "w") as f:
+        json.dump(results, f)
+
+
 results = []
 for viewpoint_id, record in viewpoint_data_dict.items():
+    print("Viewpoint id:", viewpoint_id)
     hetero_data = record[0]
 
     features_cf, adj_cf, edits, proximity_metrics = (
@@ -286,12 +305,11 @@ for viewpoint_id, record in viewpoint_data_dict.items():
         }
     )
 
+    if len(results) % 20 == 0:
+        if len(viewpoint_ids) > 1:
+            save_results(results)
+
 # Only store results if evaluated for multiple process executions
 if len(viewpoint_ids) > 1:
     print(len(results), "results collected")
-    run_id = os.getenv("RUN_ID")
-    with open(
-        f"results/road_traffic_fine_management-CLEAR{f'-{run_id}' if run_id else ''}.json",
-        "w",
-    ) as f:
-        json.dump(results, f)
+    save_results(results)

@@ -28,7 +28,7 @@ from process_execution.process_execution import extract_process_execution
 from utils import clean_ocel_dataset
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -300,7 +300,9 @@ for viewpoint_id, record in viewpoint_data_dict.items():
         }
     )
 
-if results:
+# Only store results if evaluated for multiple process executions
+if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
     run_id = os.getenv("RUN_ID")
     file_name = os.path.basename(os.path.dirname(__file__))
     with open(

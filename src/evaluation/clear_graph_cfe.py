@@ -56,6 +56,7 @@ from evaluation.utils import hetero_to_homogeneous_data, to_dense
 # Dataset-statistics helper
 # ---------------------------------------------------------------------------
 
+
 @dataclasses.dataclass
 class GraphCFEDatasetStats:
     """
@@ -739,30 +740,48 @@ class MLP(nn.Module):
 
 
 # Build dense training tensors for GraphCFE and train the VAE on the available dataset.
-def build_graphcfe_training_tensors(dataset, labels, stats, device):
-    features = []
-    adjs = []
-    ys = []
-    us = []
-    for data, label in zip(dataset, labels, strict=False):
+def build_graphcfe_training_tensors(
+    dataset, labels, stats, device, sample_size: Optional[int] = None
+):
+    # Sample from dataset if sample_size is specified
+    if sample_size is not None:
+        n_total = len(dataset)
+        if sample_size > n_total:
+            sample_size = n_total
+        indices = torch.randperm(n_total, device="cpu")[:sample_size]
+        dataset = [dataset[i] for i in indices]
+        if isinstance(labels, torch.Tensor):
+            labels = labels[indices]
+        else:
+            labels = [labels[i] for i in indices]
+
+    n = len(dataset)
+
+    features = torch.empty(
+        n, stats.max_num_nodes, stats.x_dim, dtype=torch.float32, device=device
+    )
+    adjs = torch.empty(
+        n,
+        stats.max_num_nodes,
+        stats.max_num_nodes,
+        dtype=torch.float32,
+        device=device,
+    )
+    ys = torch.empty(n, 1, dtype=torch.float32, device=device)
+    us = torch.empty(n, 1, dtype=torch.float32, device=device)
+
+    for i, (data, label) in enumerate(zip(dataset, labels, strict=False)):
         feat, adj, _ = to_dense(data, stats.max_num_nodes, stats.x_dim, device)
-        features.append(feat)
-        adjs.append(adj)
-        ys.append(
-            torch.tensor([[float(label.item())]], dtype=torch.float32, device=device)
-        )
+        features[i] = feat[0]
+        adjs[i] = adj[0]
+        ys[i] = float(label.item())
 
         num_edges = int(data.edge_index.shape[1])
         num_nodes = max(int(data.num_nodes), 1)
         u_value = float(num_edges / num_nodes)
-        us.append(torch.tensor([[u_value]], dtype=torch.float32, device=device))
+        us[i] = u_value
 
-    return (
-        torch.cat(features, dim=0),
-        torch.cat(adjs, dim=0),
-        torch.cat(ys, dim=0),
-        torch.cat(us, dim=0),
-    )
+    return features, adjs, ys, us
 
 
 def train_graphcfe_model(
@@ -831,15 +850,15 @@ def train_graphcfe_model(
 
     for epoch in range(1, num_epochs + 1):
         graphcfe_model.train()
-        perm = torch.randperm(num_samples, device=device)
+        perm = torch.randperm(num_samples)  # Create permutation on CPU
         total_loss = 0.0
 
         for start in range(0, num_samples, batch_size):
             batch_idx = perm[start : start + batch_size]
-            batch_x = features[batch_idx]
-            batch_adj = adjs[batch_idx]
-            batch_y = ys[batch_idx]
-            batch_u = us[batch_idx]
+            batch_x = features[batch_idx].to(device)
+            batch_adj = adjs[batch_idx].to(device)
+            batch_y = ys[batch_idx].to(device)
+            batch_u = us[batch_idx].to(device)
 
             outputs = graphcfe_model(batch_x, batch_u, batch_adj, batch_y)
             recon_adj = outputs["adj_reconst"]

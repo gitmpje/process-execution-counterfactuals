@@ -5,6 +5,7 @@ from pathlib import Path
 
 from typing import List
 
+
 nested_keys = [
     "dist_x",
     "dist_a",
@@ -55,8 +56,9 @@ def check_edit(node_feat_edit_str: str, threshold: float):
 # %%
 # Configuration: specify which child folders to process
 CHILD_FOLDERS = [
-    "road_traffic_fine_management",
+    # "road_traffic_fine_management",
     # "simulation-po_item",
+    "socel_hinge",
 ]
 SCENARIO_PREFIXES = {
     "simulation-po_item": [
@@ -146,12 +148,14 @@ for child_folder in CHILD_FOLDERS:
 
         try:
             df["n_changes"] = df["edits"].apply(
-                lambda x: sum(
-                    check_edit(edit, threshold=node_feat_edit_threshold)
-                    for edit in parse_edits(x)
+                lambda x: (
+                    sum(
+                        check_edit(edit, threshold=node_feat_edit_threshold)
+                        for edit in parse_edits(x)
+                    )
+                    if isinstance(x, str)
+                    else float("nan")
                 )
-                if isinstance(x, str)
-                else float("nan")
             )
         except KeyError:
             df["n_changes"] = float("nan")
@@ -324,3 +328,98 @@ summary_df_filtered = summary_df[
     ~summary_df["method"].isin(["hetero-depth-first=node"])
 ]
 print(summary_df_to_latex(summary_df_filtered))
+
+
+# %% Graph statistics
+import torch
+from torch_geometric.data import HeteroData
+from collections import defaultdict
+from typing import List, Dict, Any
+
+
+def aggregate_hetero_stats(graphs: List[HeteroData]) -> Dict[str, Any]:
+    """
+    Aggregates statistics for a list of HeteroData objects.
+
+    Args:
+        graphs (List[HeteroData]): List of PyTorch Geometric HeteroData objects.
+
+    Returns:
+        Dict[str, Any]: Aggregated statistics.
+    """
+    if not graphs:
+        raise ValueError("The list of graphs is empty.")
+
+    # Initialize counters
+    stats = {
+        "total_graphs": len(graphs),
+        "node_counts": defaultdict(int),
+        "edge_counts": defaultdict(int),
+        "node_feature_dims": {},
+        "edge_feature_dims": {},
+    }
+
+    for g in graphs:
+        if not isinstance(g, HeteroData):
+            raise TypeError("All elements must be HeteroData objects.")
+
+        # Count nodes per type
+        for node_type in g.node_types:
+            num_nodes = g[node_type].num_nodes
+            stats["node_counts"][node_type] += num_nodes
+
+            # Record feature dimension if available
+            if "x" in g[node_type]:
+                stats["node_feature_dims"][node_type] = g[node_type].x.size(1)
+
+        # Count edges per type
+        for edge_type in g.edge_types:
+            num_edges = g[edge_type].edge_index.size(1)
+            stats["edge_counts"][edge_type] += num_edges
+
+            # Record edge feature dimension if available
+            if "edge_attr" in g[edge_type]:
+                stats["edge_feature_dims"][edge_type] = g[edge_type].edge_attr.size(1)
+
+    return stats
+
+
+report_stats = []
+for data_file in [
+    "bpi_2011/data/dataset-pe.pt",
+    # "road_traffic_fine_management/data/dataset-pe.pt",
+    # "socel_hinge/data/dataset-pe-MalePart.pt",
+    # "socel_hinge/data/dataset-pe-HingePack.pt",
+]:
+    dataset = torch.load(data_file, weights_only=False)
+    print(f"Calculating statistics for {data_file}")
+    numbers = aggregate_hetero_stats(dataset)
+
+    stats = {"data_file": data_file}
+    stats["avg_event_nodes"] = numbers["node_counts"]["EVENT"] / numbers["total_graphs"]
+
+    n_objects = sum(
+        numbers["node_counts"][nt] for nt in numbers["node_counts"] if nt != "EVENT"
+    )
+    stats["avg_object_nodes"] = n_objects / numbers["total_graphs"]
+
+    report_stats.append(stats)
+
+# %% Attribute statistics
+import json
+
+from gnn.utils import Metadata
+
+for metadata_file in [
+    "bpi_2011/data/metadata-pe.json",
+    "road_traffic_fine_management/data/metadata-pe.json",
+    "socel_hinge/data/metadata-pe-MalePart.json",
+    "socel_hinge/data/metadata-pe-HingePack.json",
+]:
+    with open(metadata_file, "r") as f:
+        metadata_dict = json.load(f)
+    metadata = Metadata.from_dict(metadata_dict)
+
+    print(metadata_file)
+    print("EA:", sum(len(v) for v in metadata.node_cat_keys["EVENT"].values()))
+    print("EO:", sum(len(v) for v in metadata.node_cat_keys["OBJECT"].values()))

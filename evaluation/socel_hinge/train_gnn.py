@@ -14,7 +14,7 @@ from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -119,7 +119,7 @@ else:
         model=model,
         viewpoint=metadata.viewpoint,
         device=device,
-        criterion=torch.nn.CrossEntropyLoss(),  # weight=class_weights
+        criterion=torch.nn.CrossEntropyLoss(class_weights),  # weight=class_weights
         output_type="binary",
         learning_rate=learning_rate,
     )

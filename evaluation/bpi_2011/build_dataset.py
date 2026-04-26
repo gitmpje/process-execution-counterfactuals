@@ -9,6 +9,7 @@ from collections import Counter
 from networkx import Graph
 from numpy import diff, linspace, where, sign
 from pandas import DataFrame
+from pm4py.objects.ocel.exporter.jsonocel import exporter
 from torch import save as tsave, tensor
 from scipy.stats import gaussian_kde
 
@@ -29,6 +30,7 @@ with open(config_file) as f:
 # Dataset
 dataset_cfg = cfg["dataset"]
 path_xes = dataset_cfg["path_xes"]
+path_ocel = dataset_cfg.get("path_ocel")
 path_dataset = dataset_cfg["path_dataset"]
 path_metadata = dataset_cfg["path_metadata"]
 exclude_attributes = dataset_cfg.get("exclude_attributes", [])
@@ -45,6 +47,9 @@ event_log = pm4py.read_xes(path_xes)
 
 # %% Convert event log to OCEL and Networkx graph
 ocel, ocel_nx = convert_event_log_ocel(event_log, viewpoint)
+
+if path_ocel:
+    exporter.apply(ocel, path_ocel, variant=exporter.Variants.OCEL20_STANDARD)
 
 # %% Define features for dataset
 viewpoint_objects = event_log[viewpoint].unique()

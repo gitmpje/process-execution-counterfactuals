@@ -299,6 +299,216 @@ def _make_pairs(
     return pairs_sorted[:top_k] if top_k is not None else pairs_sorted
 
 
+def get_dataset_category_importances(
+    explanation: Explanation | HeteroExplanation,
+    feat_label_dict: Dict[str, List[str]],
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+    metadata: Metadata = None,
+    hetero_data: HeteroData = None,
+) -> Dict[str, Dict[str, Dict[str, Dict[Any, float]]]]:
+    """Return a copy of node_cat_keys extended with dataset-level importance scores.
+
+    For each categorical attribute, the list of categories is replaced with a dict
+    mapping category value to its importance score (averaged across nodes and features).
+    Categories not present in the explanation receive an importance of 0.0.
+    """
+    result = {}
+
+    nt_ocel_type = {
+        nt: ocel_type for ocel_type, d in node_cat_keys.items() for nt in d.keys()
+    }
+    category_labels = (
+        {
+            f"{k}[{label}]": k
+            for d1 in node_cat_keys.values()
+            for d2 in d1.values()
+            for k, v in d2.items()
+            for label in v
+        }
+        if node_cat_keys
+        else {}
+    )
+
+    # Compute per-feature importances
+    if isinstance(explanation, HeteroExplanation):
+        node_types = explanation.node_types
+        for nt in node_types:
+            node_expl = explanation[nt]
+            if node_expl is None:
+                continue
+            mask = node_expl.get("node_mask")
+            x = explanation.get_node_store(nt).get("x")
+            if mask is None or not isinstance(mask, Tensor) or x is None:
+                continue
+            num_feats = x.size(1)
+            if mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats):
+                continue
+            per_feat = mask.mean(dim=0).detach().cpu()
+            feat_labels = feat_label_dict.get(nt, []) or [
+                f"feat_{i}" for i in range(num_feats)
+            ]
+            for i, imp in enumerate(per_feat.tolist()):
+                fname = feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                base = category_labels.get(fname, None)
+                if base is not None and "[" in fname and "]" in fname:
+                    val = fname.split("[")[1].split("]")[0]
+                    ocel_type = nt_ocel_type[nt]
+                    cat_keys = node_cat_keys[ocel_type].get(nt, {})
+                    categories = cat_keys.get(base, [])
+                    if val in categories:
+                        result.setdefault(ocel_type, {}).setdefault(nt, {}).setdefault(
+                            base, {}
+                        )[val] = float(imp)
+    else:
+        if (hetero_data is None) or (metadata is None):
+            pass  # result remains empty
+        else:
+            mask = explanation.get("node_mask")
+            x = explanation.get("x")
+            if mask is None or not isinstance(mask, Tensor) or x is None:
+                pass
+            else:
+                num_feats = x.size(1)
+                if not (
+                    mask.dim() == 1 or (mask.dim() == 2 and mask.size(-1) != num_feats)
+                ):
+                    homo_data = to_homogeneous_data(
+                        hetero_data,
+                        metadata.node_num_keys,
+                        metadata.node_cat_keys,
+                        metadata.node_types,
+                        metadata.one_hot_encoding,
+                        metadata.unique_node_type_attribute_columns,
+                    )
+                    orig_node_types = hetero_data.node_types
+                    node_type_tensor = homo_data.node_type
+                    for type_idx, nt in enumerate(orig_node_types):
+                        node_store = hetero_data[nt]
+                        if not hasattr(node_store, "x") or node_store.x is None:
+                            continue
+                        nt_num_feats = node_store.x.size(1)
+                        node_mask_idx = (node_type_tensor == type_idx).nonzero(
+                            as_tuple=True
+                        )[0]
+                        if node_mask_idx.numel() == 0:
+                            continue
+                        per_feat = (
+                            mask[node_mask_idx, :nt_num_feats]
+                            .mean(dim=0)
+                            .detach()
+                            .cpu()
+                        )
+                        feat_labels = feat_label_dict.get(nt, []) or [
+                            f"feat_{i}" for i in range(nt_num_feats)
+                        ]
+                        for i, imp in enumerate(per_feat.tolist()):
+                            fname = (
+                                feat_labels[i] if i < len(feat_labels) else f"feat_{i}"
+                            )
+                            base = category_labels.get(fname, None)
+                            if base is not None and "[" in fname and "]" in fname:
+                                val = fname.split("[")[1].split("]")[0]
+                                ocel_type = nt_ocel_type[nt]
+                                cat_keys = node_cat_keys[ocel_type].get(nt, {})
+                                categories = cat_keys.get(base, [])
+                                if val in categories:
+                                    result.setdefault(ocel_type, {}).setdefault(
+                                        nt, {}
+                                    ).setdefault(base, {})[val] = float(imp)
+
+    # Build the full result by copying node_cat_keys and replacing lists with dicts
+    for ocel_type, type_dict in node_cat_keys.items():
+        result.setdefault(ocel_type, {})
+        for nt, attrs in type_dict.items():
+            result[ocel_type].setdefault(nt, {})
+            for attr, cats in attrs.items():
+                if isinstance(cats, list):
+                    imp_dict = {
+                        cat: result.get(ocel_type, {})
+                        .get(nt, {})
+                        .get(attr, {})
+                        .get(cat, 0.0)
+                        for cat in cats
+                    }
+                    result[ocel_type][nt][attr] = imp_dict
+                else:
+                    result[ocel_type][nt][attr] = cats
+
+    return result
+
+
+def _initialize_category_importances(
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+) -> Dict[str, Dict[str, Dict[str, Dict[Any, float]]]]:
+    """Create a zero-initialized category importance structure from node_cat_keys."""
+    result: Dict[str, Dict[str, Dict[str, Dict[Any, float]]]] = {}
+    for nt, type_dict in node_cat_keys.items():
+        result.setdefault(nt, {})
+        for obj_type, attrs in type_dict.items():
+            result[nt].setdefault(obj_type, {})
+            for attr, cats in attrs.items():
+                if isinstance(cats, list):
+                    result[nt][obj_type][attr] = {cat: 0.0 for cat in cats}
+                else:
+                    result[nt][obj_type][attr] = cats
+    return result
+
+
+def aggregate_dataset_category_importances(
+    examples: Iterable[
+        Tuple[
+            Explanation | HeteroExplanation,
+            Optional[HeteroData],
+            Dict[str, List[str]],
+            Optional[Dict[str, List[str]]],
+        ]
+    ],
+    node_cat_keys: Dict[str, Dict[str, Dict[str, List[Any]]]],
+    metadata: Metadata = None,
+    average: bool = True,
+) -> Dict[str, Dict[str, Dict[str, Dict[Any, float]]]]:
+    """Aggregate category importance scores across multiple explanations.
+
+    Each tuple in ``examples`` should contain:
+      - explanation
+      - hetero_data (or None for heterogeneous explanations)
+      - feat_label_dict
+      - node_label_dict (or None if not needed)
+
+    The returned structure preserves the full ``node_cat_keys`` schema and
+    aggregates importance scores by category across all examples. If
+    ``average`` is ``True``, the result is averaged by example count.
+    """
+    aggregated = _initialize_category_importances(node_cat_keys)
+    count = 0
+
+    for explanation, hetero_data, feat_label_dict, _ in examples:
+        importances = get_dataset_category_importances(
+            explanation=explanation,
+            feat_label_dict=feat_label_dict,
+            node_cat_keys=node_cat_keys,
+            metadata=metadata,
+            hetero_data=hetero_data,
+        )
+
+        for nt, obj_types in importances.items():
+            for obj_type, attrs in obj_types.items():
+                for attr_name, cats in attrs.items():
+                    for cat_name, imp in cats.items():
+                        aggregated[nt][obj_type][attr_name][cat_name] += imp
+
+        count += 1
+
+    if average and count > 0:
+        for obj_types in aggregated.values():
+            for attrs in obj_types.values():
+                for cats in attrs.values():
+                    for cat_name in cats:
+                        cats[cat_name] /= float(count)
+
+    return aggregated
+
+
 def build_object_substitution_actions(
     target_nodes: Iterable[Tuple[Any, Any]],
     ocel_nodes: Iterable[Tuple[Any, Any]],
@@ -688,6 +898,11 @@ def build_node_attribute_actions(
     nodes_order: Iterable[Any] = None,
     attr_order: Dict[str, List[str]] = None,
     object_type_column: str = "ocel:type",
+    category_importances: Optional[
+        Dict[str, Dict[str, Dict[str, Dict[Any, float]]]]
+    ] = None,
+    category_importance_threshold: float = 0.0,
+    category_top_k: Optional[int] = None,
 ) -> List:
     """Construct NodeAttributeNumeric and NodeAttributeCategorical actions.
 
@@ -766,6 +981,33 @@ def build_node_attribute_actions(
                     continue
                 if not category_values:
                     continue
+                # Filter categories by importance if provided
+                if category_importances is not None:
+                    obj_type_key = (
+                        "EVENT"
+                        if node_type == "EVENT"
+                        else attr.get(object_type_column, "")
+                    )
+                    imp_dict = (
+                        category_importances.get(node_type, {})
+                        .get(obj_type_key, {})
+                        .get(attr_name, {})
+                    )
+                    category_values = [
+                        v
+                        for v in sorted(
+                            category_values,
+                            key=lambda v: imp_dict.get(v, 0.0),
+                            reverse=True,
+                        )
+                        if imp_dict.get(v, 0.0) > category_importance_threshold
+                    ]
+
+                if category_top_k is not None:
+                    category_values = category_values[:category_top_k]
+                if not category_values:
+                    continue
+
                 value_original = attr.get(attr_name)
                 actions.append(
                     NodeAttributeCategorical(
@@ -870,6 +1112,8 @@ def construct_attribute_spec_dict(
 __all__ = [
     "get_nodes_by_importance",
     "get_feature_labels_by_importance",
+    "get_dataset_category_importances",
+    "aggregate_dataset_category_importances",
     "build_object_substitution_actions",
     "build_event_substitution_actions",
     "build_event_insertion_actions",

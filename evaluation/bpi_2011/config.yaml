@@ -1,5 +1,6 @@
 dataset:
   path_xes: "data/Hospital_log.xes.gz"
+  path_ocel: "data/Hospital_log.json"
   path_dataset: "data/dataset-pe.pt"
   path_labels: "data/labels.json"
   path_metadata: "data/metadata-pe.json"
@@ -40,8 +41,25 @@ dataset:
     - "case:Start date:14"
     - "case:End date:15"
     - "case:Start date:15"
+    # - "case:Diagnosis"
+    # - "case:Diagnosis:1"
+    # - "case:Diagnosis:2"
+    # - "case:Diagnosis:3"
+    # - "case:Diagnosis:4"
+    # - "case:Diagnosis:5"
+    # - "case:Diagnosis:6"
+    # - "case:Diagnosis:7"
+    # - "case:Diagnosis:8"
+    # - "case:Diagnosis:9"
+    # - "case:Diagnosis:10"
+    # - "case:Diagnosis:11"
+    # - "case:Diagnosis:12"
+    # - "case:Diagnosis:13"
+    # - "case:Diagnosis:14"
+    # - "case:Diagnosis:15"
   normalize: True
-  one_hot_encoding: True
+  one_hot_encoding: False
+  add_reverse_edges: True
 
 process_execution:
   viewpoint: "case:concept:name"
@@ -49,19 +67,33 @@ process_execution:
 gnn:
   path_model: "data/model-pe.pth"
   homogeneous: True
-  unique_node_type_attribute_columns: True
   num_layers: 1
   batch_size: 10
   dropout: 0.1
   n_epochs: 100
-  start_patience: 25
+  start_patience: 50
   learning_rate: 0.01
 
 counterfactual:
+  # verbose: True
   # viewpoint_id: "00000001"
   viewpoint_label: False
-  depth_first: "attribute"
+  depth_first: "node"
   num_bins: 2
-  max_change_size: 3
-  node_importance_threshold: 0
-  attr_importance_threshold: 0
+  max_change_size: 2
+  node_importance_threshold: 0.001
+  attr_importance_threshold: 0.01
+  # category_importance_threshold: 0.01
+
+counterfactual_graphcfe:
+  path_model: "data/model_graphcfe.pth"
+  vae_type: "graphVAE"
+  sample_size: 500
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 200
+  learning_rate: 0.01
+  patience: 40

@@ -540,6 +540,7 @@ for viewpoint_id in viewpoint_ids:
 
 # Only store results if evaluated for multiple process executions
 if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
     run_id = os.getenv("RUN_ID")
     with open(
         f"results/{SCENARIO_PREFIX}{'-hetero' if not homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",

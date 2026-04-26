@@ -472,7 +472,9 @@ for viewpoint_id in viewpoint_ids:
             }
         )
 
-if results:
+# Only store results if evaluated for multiple process executions
+if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
     run_id = os.getenv("RUN_ID")
     file_name = os.path.basename(os.path.dirname(__file__))
     with open(

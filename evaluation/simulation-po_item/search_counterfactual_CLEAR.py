@@ -300,8 +300,12 @@ for viewpoint_id, record in viewpoint_data_dict.items():
         }
     )
 
-run_id = os.getenv("RUN_ID")
-with open(
-    f"results/{SCENARIO_PREFIX}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
-) as f:
-    json.dump(results, f)
+
+# Only store results if evaluated for multiple process executions
+if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
+    run_id = os.getenv("RUN_ID")
+    with open(
+        f"results/{SCENARIO_PREFIX}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w"
+    ) as f:
+        json.dump(results, f)

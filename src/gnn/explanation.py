@@ -1,11 +1,13 @@
 from networkx import Graph
 from torch import long, zeros
+from torch_geometric.data import HeteroData
 from torch_geometric.explain import (
     Explainer,
     Explanation,
     GNNExplainer,
     HeteroExplanation,
 )
+from typing import Dict, List, Tuple
 
 from gnn.utils import Metadata
 from gnn.hetero_graph_data import build_hetero_data, to_homogeneous_data
@@ -23,7 +25,12 @@ def generate_explanation(
     event_activity_col: str,
     homogeneous: bool = False,
     verbose: bool = False,
-) -> HeteroExplanation | Explanation:
+) -> Tuple[
+    HeteroExplanation | Explanation,
+    HeteroData,
+    Dict[str, List[str]],
+    Dict[str, List[str]],
+]:
     device = next(model.parameters()).device
 
     hetero_data, _, _, _, feat_label_dict, node_label_dict = build_hetero_data(

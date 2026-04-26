@@ -19,6 +19,7 @@ from tree_search.action_helpers import (
     construct_attribute_spec_dict,
     get_nodes_by_importance,
     get_feature_labels_by_importance,
+    aggregate_dataset_category_importances,
 )
 from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
@@ -57,6 +58,8 @@ num_bins = counterfactual_cfg["num_bins"]
 max_change_size = counterfactual_cfg["max_change_size"]
 node_importance_threshold = counterfactual_cfg["node_importance_threshold"]
 attr_importance_threshold = counterfactual_cfg["attr_importance_threshold"]
+category_importance_threshold = counterfactual_cfg.get("category_importance_threshold")
+category_top_k = counterfactual_cfg.get("category_top_k")
 
 # Load metadata
 with open(path_metadata, "r") as f:
@@ -87,52 +90,57 @@ def process_outcome(p: Graph) -> bool:
     Returns:
         float: The predicted value.
     """
-    hetero_data, _, _, _, _, _ = build_hetero_data(
-        graph=p,
-        node_num_keys=metadata.node_num_keys,
-        node_cat_keys=metadata.node_cat_keys,
-        object_type_col=ocel.object_type_column,
-        event_activity_col=ocel.event_activity,
-        add_reverse_edges=metadata.add_reverse_edges,
-        viewpoint=metadata.viewpoint,
-        normalize=metadata.normalized,
-        one_hot_encoding=metadata.one_hot_encoding,
-    )
-
-    if homogeneous:
-        data = to_homogeneous_data(
-            hetero_data,
-            metadata.node_num_keys,
-            metadata.node_cat_keys,
-            metadata.node_types,
-            metadata.one_hot_encoding,
-            metadata.unique_node_type_attribute_columns,
+    try:
+        hetero_data, _, _, _, _, _ = build_hetero_data(
+            graph=p,
+            node_num_keys=metadata.node_num_keys,
+            node_cat_keys=metadata.node_cat_keys,
+            object_type_col=ocel.object_type_column,
+            event_activity_col=ocel.event_activity,
+            viewpoint=metadata.viewpoint,
+            normalize=metadata.normalized,
+            one_hot_encoding=metadata.one_hot_encoding,
+            add_reverse_edges=metadata.add_reverse_edges,
         )
-        batch = torch.zeros(
-            data.num_nodes if data.num_nodes else 0,
-            dtype=torch.long,
-            device=device,
-        )
-        data = data.to(device)
-        out = model(data.x, data.edge_index, batch)
-    else:
-        data = hetero_data.to(device)
 
-        # For a single graph, create a batch vector of zeros (all nodes belong to graph 0)
-        batch_dict = {
-            node_type: torch.zeros(
-                data[node_type].num_nodes, dtype=torch.long, device=device
+        if homogeneous:
+            data = to_homogeneous_data(
+                hetero_data,
+                metadata.node_num_keys,
+                metadata.node_cat_keys,
+                metadata.node_types,
+                metadata.one_hot_encoding,
+                metadata.unique_node_type_attribute_columns,
             )
-            for node_type in metadata.node_types
-        }
-        out = model(data.x_dict, data.edge_index_dict, batch_dict)
+            batch = torch.zeros(
+                data.num_nodes if data.num_nodes else 0,
+                dtype=torch.long,
+                device=device,
+            )
+            data = data.to(device)
+            out = model(data.x, data.edge_index, batch)
+        else:
+            batch_dict = {
+                node_type: torch.zeros(
+                    hetero_data[node_type].num_nodes
+                    if hetero_data[node_type].num_nodes
+                    else 0,
+                    dtype=torch.long,
+                    device=device,
+                )
+                for node_type in metadata.node_types
+            }
+            data = hetero_data.to(device)
+            out = model(data.x_dict, data.edge_index_dict, batch_dict)
+    except Exception as e:
+        print(f"Error occurred while processing graph: {e}")
+        print(data)
+        raise e
 
     return bool(out.argmax(dim=-1).cpu().item())
 
 
-# %% Configure counterfactual generation (tree search)
-
-# Select process execution to generate counterfactual for
+# %%
 selected_attributes = []
 for node_type in ["EVENT", "OBJECT"]:
     for d in metadata.node_cat_keys[node_type].values():
@@ -172,12 +180,45 @@ def save_results(results):
     run_id = os.getenv("RUN_ID")
     file_name = os.path.basename(os.path.dirname(__file__))
     with open(
-        f"results/{file_name}{'-homogeneous' if homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",
+        f"results/{file_name}{'-hetero' if not homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",
         "w",
     ) as f:
         json.dump(results, f)
 
 
+explanations = {}
+print("Generating explanations for all viewpoint IDs...")
+for viewpoint_id in viewpoint_ids:
+    events = set([e for e, _ in ocel_nx.in_edges(viewpoint_id)])
+    nodes = events | {viewpoint_id}
+    target_process_execution = ocel_nx.subgraph(nodes).copy()
+
+    explanation, hetero_data, feat_label_dict, node_label_dict = generate_explanation(
+        G=target_process_execution,
+        metadata=metadata,
+        model=model,
+        object_type_col=ocel.object_type_column,
+        event_activity_col=ocel.event_activity,
+        homogeneous=homogeneous,
+        verbose=verbose,
+    )
+    explanations[viewpoint_id] = (
+        explanation,
+        hetero_data,
+        feat_label_dict,
+        node_label_dict,
+    )
+
+category_importances = None
+if metadata.one_hot_encoding and category_importance_threshold:
+    category_importances = aggregate_dataset_category_importances(
+        examples=explanations.values(),
+        node_cat_keys=metadata.node_cat_keys,
+        metadata=metadata,
+        average=True,
+    )
+
+# %% Search for counterfactuals and evaluate proximity
 results = []
 for viewpoint_id in viewpoint_ids:
     print("Viewpoint id:", viewpoint_id)
@@ -191,17 +232,9 @@ for viewpoint_id in viewpoint_ids:
         print(f"Skipping {viewpoint_id}")
         continue
 
-    target_explanation, hetero_data, feat_label_dict, node_label_dict = (
-        generate_explanation(
-            G=target_process_execution,
-            metadata=metadata,
-            model=model,
-            object_type_col=ocel.object_type_column,
-            event_activity_col=ocel.event_activity,
-            homogeneous=homogeneous,
-            verbose=verbose,
-        )
-    )
+    target_explanation, hetero_data, feat_label_dict, node_label_dict = explanations[
+        viewpoint_id
+    ]
 
     nodes_ordered = [
         n["label"]
@@ -236,6 +269,9 @@ for viewpoint_id in viewpoint_ids:
         attr_order=attr_ordered,
         node_type="OBJECT",
         object_type_column=ocel.object_type_column,
+        category_importances=category_importances,
+        category_importance_threshold=category_importance_threshold,
+        category_top_k=category_top_k,
     )
 
     target_nodes_for_subst = (
@@ -246,7 +282,6 @@ for viewpoint_id in viewpoint_ids:
         .get(ocel.object_type_column, "")
         in [""]
     )
-
     object_substitution_actions = build_object_substitution_actions(
         target_nodes=target_nodes_for_subst,
         ocel_nodes=ocel_nx.nodes(data=True),
@@ -261,6 +296,8 @@ for viewpoint_id in viewpoint_ids:
         nodes_order=nodes_ordered,
         attr_order=attr_ordered,
         node_type="EVENT",
+        category_importances=category_importances,
+        category_importance_threshold=category_importance_threshold,
     )
 
     target_event_nodes = [
@@ -476,9 +513,12 @@ for viewpoint_id in viewpoint_ids:
         )
 
         if len(results) % 20 == 0:
-            save_results(results)
+            if len(viewpoint_ids) > 1:
+                save_results(results)
 
-if results:
+# Only store results if evaluated for multiple process executions
+if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
     save_results(results)
 
 

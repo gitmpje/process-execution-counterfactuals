@@ -17,6 +17,8 @@ from tree_search.action_helpers import (
     construct_attribute_spec_dict,
     get_nodes_by_importance,
     get_feature_labels_by_importance,
+    get_dataset_category_importances,
+    aggregate_dataset_category_importances,
 )
 from tree_search.action import (
     EventNodeDeletion,
@@ -95,6 +97,93 @@ def test_get_feature_labels_per_category_and_topk():
 
 
 # ---------------------------------------------------------------------------
+# tests for get_dataset_category_importances
+# ---------------------------------------------------------------------------
+
+
+def test_get_dataset_category_importances_basic():
+    # Test with one-hot encoded features
+    mask = tensor([[1.0, 2.0], [3.0, 4.0]])  # 2 nodes, 2 features
+    expl = DummyExplanation({"OBJECT": {"node_mask": mask}})
+    feat_labels = {"OBJECT": ["color[red]", "color[blue]"]}
+    node_cat_keys = {"OBJECT": {"item": {"color": ["red", "blue"]}}}
+
+    result = get_dataset_category_importances(expl, feat_labels, node_cat_keys)
+
+    # Should have the same structure but with dicts instead of lists
+    assert "OBJECT" in result
+    assert "item" in result["OBJECT"]
+    assert "color" in result["OBJECT"]["item"]
+    assert isinstance(result["OBJECT"]["item"]["color"], dict)
+    assert "red" in result["OBJECT"]["item"]["color"]
+    assert "blue" in result["OBJECT"]["item"]["color"]
+    # Importances should be averaged: red = (1+3)/2 = 2.0, blue = (2+4)/2 = 3.0
+    assert result["OBJECT"]["item"]["color"]["red"] == 2.0
+    assert result["OBJECT"]["item"]["color"]["blue"] == 3.0
+
+
+def test_get_dataset_category_importances_missing_category():
+    # Test when some categories are not in the explanation
+    mask = tensor([[1.0, 2.0]])  # Only 2 features, but 3 categories
+    expl = DummyExplanation({"OBJECT": {"node_mask": mask}})
+    feat_labels = {"OBJECT": ["color[red]", "color[blue]"]}
+    node_cat_keys = {"OBJECT": {"item": {"color": ["red", "blue", "green"]}}}
+
+    result = get_dataset_category_importances(expl, feat_labels, node_cat_keys)
+
+    assert result["OBJECT"]["item"]["color"]["red"] == 1.0
+    assert result["OBJECT"]["item"]["color"]["blue"] == 2.0
+    assert result["OBJECT"]["item"]["color"]["green"] == 0.0  # Not in explanation
+
+
+def test_get_dataset_category_importances_empty_explanation():
+    # Test with empty explanation
+    expl = DummyExplanation({})
+    feat_labels = {"OBJECT": ["color[red]"]}
+    node_cat_keys = {"OBJECT": {"item": {"color": ["red"]}}}
+
+    result = get_dataset_category_importances(expl, feat_labels, node_cat_keys)
+
+    assert result["OBJECT"]["item"]["color"]["red"] == 0.0
+
+
+def test_aggregate_dataset_category_importances_average():
+    node_cat_keys = {"OBJECT": {"item": {"color": ["red", "blue"]}}}
+
+    expl1 = DummyExplanation({"OBJECT": {"node_mask": tensor([[1.0, 2.0]])}})
+    expl2 = DummyExplanation({"OBJECT": {"node_mask": tensor([[3.0, 5.0]])}})
+
+    examples = [
+        (expl1, {"OBJECT": ["color[red]", "color[blue]"]}, None),
+        (expl2, {"OBJECT": ["color[red]", "color[blue]"]}, None),
+    ]
+
+    result = aggregate_dataset_category_importances(
+        examples, node_cat_keys, metadata=None, average=True
+    )
+
+    assert result["OBJECT"]["item"]["color"]["red"] == 2.0
+    assert result["OBJECT"]["item"]["color"]["blue"] == 3.5
+
+
+def test_aggregate_dataset_category_importances_zero_fill():
+    node_cat_keys = {"OBJECT": {"item": {"color": ["red", "blue", "green"]}}}
+
+    expl = DummyExplanation({"OBJECT": {"node_mask": tensor([[1.0, 2.0]])}})
+    examples = [
+        (expl, {"OBJECT": ["color[red]", "color[blue]"]}, None),
+    ]
+
+    result = aggregate_dataset_category_importances(
+        examples, node_cat_keys, metadata=None, average=False
+    )
+
+    assert result["OBJECT"]["item"]["color"]["red"] == 1.0
+    assert result["OBJECT"]["item"]["color"]["blue"] == 2.0
+    assert result["OBJECT"]["item"]["color"]["green"] == 0.0
+
+
+# ---------------------------------------------------------------------------
 # _extract_attr
 # ---------------------------------------------------------------------------
 
@@ -155,6 +244,72 @@ def test_build_node_attribute_actions_numeric_and_cat():
     assert num.node_id == "n1"
     cat = [f for f in feats if isinstance(f, NodeAttributeCategorical)][0]
     assert cat.category_values == ["red", "blue"]
+
+
+def test_build_node_attribute_actions_with_category_filtering():
+    nodes = [
+        ("n1", {"attr": {"type": "EVENT", "b": "red"}}),
+    ]
+    spec = {"b": ["red", "blue", "green"]}
+
+    # Create category importances where only "red" and "blue" have positive importance
+    category_importances = {
+        "EVENT": {"EVENT": {"b": {"red": 0.8, "blue": 0.5, "green": 0.0}}}
+    }
+
+    # Test with threshold 0.0 (should include all with > 0.0)
+    feats = build_node_attribute_actions(
+        nodes,
+        spec,
+        node_type="EVENT",
+        category_importances=category_importances,
+        category_importance_threshold=0.0,
+    )
+    cat = [f for f in feats if isinstance(f, NodeAttributeCategorical)][0]
+    assert set(cat.category_values) == {"red", "blue"}
+
+    # Test with threshold 0.6 (should only include "red")
+    feats = build_node_attribute_actions(
+        nodes,
+        spec,
+        node_type="EVENT",
+        category_importances=category_importances,
+        category_importance_threshold=0.6,
+    )
+    cat = [f for f in feats if isinstance(f, NodeAttributeCategorical)][0]
+    assert cat.category_values == ["red"]
+
+    # Test with threshold 1.0 (should include none, so no categorical action)
+    feats = build_node_attribute_actions(
+        nodes,
+        spec,
+        node_type="EVENT",
+        category_importances=category_importances,
+        category_importance_threshold=1.0,
+    )
+    assert not any(isinstance(f, NodeAttributeCategorical) for f in feats)
+
+
+def test_build_node_attribute_actions_object_with_category_filtering():
+    nodes = [
+        ("n1", {"attr": {"type": "OBJECT", "ocel:type": "item", "color": "red"}}),
+    ]
+    spec = {"color": ["red", "blue", "green"]}
+
+    # Create category importances for OBJECT type
+    category_importances = {
+        "OBJECT": {"item": {"color": {"red": 1.0, "blue": 0.0, "green": 0.5}}}
+    }
+
+    feats = build_node_attribute_actions(
+        nodes,
+        spec,
+        node_type="OBJECT",
+        category_importances=category_importances,
+        category_importance_threshold=0.1,
+    )
+    cat = [f for f in feats if isinstance(f, NodeAttributeCategorical)][0]
+    assert set(cat.category_values) == {"red", "green"}
 
 
 # ---------------------------------------------------------------------------

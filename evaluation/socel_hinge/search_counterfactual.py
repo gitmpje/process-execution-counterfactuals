@@ -31,10 +31,8 @@ from process_execution.process_execution import extract_process_execution
 
 from utils import clean_ocel_dataset
 
-verbose = False
-
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -61,11 +59,11 @@ counterfactual_cfg = cfg["counterfactual"]
 viewpoint_id = counterfactual_cfg.get("viewpoint_id")
 viewpoint_label = counterfactual_cfg.get("viewpoint_label")
 depth_first = counterfactual_cfg.get("depth_first")
+verbose = counterfactual_cfg.get("verbose", False)
 num_bins = counterfactual_cfg["num_bins"]
 max_change_size = counterfactual_cfg["max_change_size"]
 node_importance_threshold = counterfactual_cfg["node_importance_threshold"]
 attr_importance_threshold = counterfactual_cfg["attr_importance_threshold"]
-
 
 # Load metadata
 with open(path_metadata, "r") as f:
@@ -179,6 +177,17 @@ if not viewpoint_ids:
     raise ValueError(
         f"No viewpoint IDs found in {path_labels} with actual label {viewpoint_label}"
     )
+
+
+def save_results(results):
+    run_id = os.getenv("RUN_ID")
+    file_name = os.path.basename(os.path.dirname(__file__))
+    with open(
+        f"results/{file_name}{'_' + config_file.split('/')[-1].split('.')[0]}{'-hetero' if not homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",
+        "w",
+    ) as f:
+        json.dump(results, f)
+
 
 results = []
 for viewpoint_id in viewpoint_ids:
@@ -488,14 +497,14 @@ for viewpoint_id in viewpoint_ids:
             }
         )
 
-if results:
-    run_id = os.getenv("RUN_ID")
-    file_name = os.path.basename(os.path.dirname(__file__))
-    with open(
-        f"results/{file_name}{'_' + config_file.split('/')[-1].split('.')[0]}{'-homogeneous' if homogeneous else ''}{f'-depth-first={depth_first}' if depth_first else '-breadth-first'}{f'-{run_id}' if run_id else ''}.json",
-        "w",
-    ) as f:
-        json.dump(results, f)
+        if len(results) % 20 == 0:
+            if len(viewpoint_ids) > 1:
+                save_results(results)
+
+# Only store results if evaluated for multiple process executions
+if len(viewpoint_ids) > 1:
+    print(len(results), "results collected")
+    save_results(results)
 
 
 # %% Visualization
