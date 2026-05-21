@@ -13,7 +13,7 @@ from gnn.hetero_graph_data import to_homogeneous_data
 from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
-from utils import _replace_scenario_prefix
+from utils import replace_scenario_prefix
 
 ### Configuration ###
 config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
@@ -23,7 +23,7 @@ with open(config_file) as f:
 # Replace $SCENARIO_PREFIX tokens in config
 scenario_prefix = os.environ.get("SCENARIO_PREFIX")
 if scenario_prefix is not None:
-    cfg = _replace_scenario_prefix(cfg, scenario_prefix)
+    cfg = replace_scenario_prefix(cfg, scenario_prefix)
 
 # Dataset
 dataset_cfg = cfg["dataset"]

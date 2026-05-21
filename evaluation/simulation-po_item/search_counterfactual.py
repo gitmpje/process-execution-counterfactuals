@@ -23,7 +23,6 @@ from tree_search.action_helpers import (
 from tree_search.action_set import ActionSet
 from tree_search.tree_search import TreeSearchCounterFactual
 
-from evaluation.clear_graph_cfe import GraphCFEDatasetStats
 from evaluation.metrics import compute_proximity, matched_diff_to_edits
 from evaluation.utils import get_dense_representation
 
@@ -33,7 +32,7 @@ from gnn.explanation import generate_explanation
 from process_execution.process_execution import extract_process_execution
 
 from utils import (
-    _replace_scenario_prefix,
+    replace_scenario_prefix,
     to_homogeneous,
     visualize_process_execution,
 )
@@ -49,7 +48,7 @@ with open(config_file) as f:
 # Replace $SCENARIO_PREFIX tokens in config
 SCENARIO_PREFIX = os.environ.get("SCENARIO_PREFIX", "scenario_01")
 if SCENARIO_PREFIX is not None:
-    cfg = _replace_scenario_prefix(cfg, SCENARIO_PREFIX)
+    cfg = replace_scenario_prefix(cfg, SCENARIO_PREFIX)
 
 # Dataset
 dataset_cfg = cfg["dataset"]
@@ -108,7 +107,6 @@ model.eval()
 
 dataset = torch.load(path_dataset, weights_only=False)
 homogeneous_dataset, labels = to_homogeneous(dataset, metadata)
-stats = GraphCFEDatasetStats.from_dataset(homogeneous_dataset, labels)
 
 
 @torch.no_grad()
@@ -463,7 +461,6 @@ for viewpoint_id in viewpoint_ids:
         features_orig, adj_orig, _ = get_dense_representation(
             target_process_execution,
             metadata,
-            stats,
             ocel.object_type_column,
             ocel.event_activity,
             device,
@@ -480,7 +477,6 @@ for viewpoint_id in viewpoint_ids:
         features_cf, adj_cf, _ = get_dense_representation(
             target_process_execution,
             metadata,
-            stats,
             ocel.object_type_column,
             ocel.event_activity,
             device,
@@ -491,10 +487,10 @@ for viewpoint_id in viewpoint_ids:
             features_orig, adj_orig, features_cf, adj_cf
         )
         edits = matched_diff_to_edits(
-            adj_orig[0],
-            adj_cf[0],
-            features_orig[0],
-            features_cf[0],
+            adj_orig,
+            adj_cf,
+            features_orig,
+            features_cf,
             adj_threshold=0.001,
             feat_threshold=0.001,
             graph_matching=True,
@@ -515,7 +511,6 @@ for viewpoint_id in viewpoint_ids:
             features_i, adj_i, _ = get_dense_representation(
                 process_execution,
                 metadata,
-                stats,
                 ocel.object_type_column,
                 ocel.event_activity,
                 device,

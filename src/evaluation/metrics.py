@@ -14,6 +14,39 @@ from gnn.utils import Metadata
 from evaluation.utils import match_nodes
 
 
+def _pad_adj(matrix: torch.Tensor, size: int) -> torch.Tensor:
+    if matrix.size(0) == size and matrix.size(1) == size:
+        return matrix
+    return F.pad(
+        matrix,
+        (0, size - matrix.size(1), 0, size - matrix.size(0)),
+        value=0.0,
+    )
+
+
+def _pad_feature_dimensions(
+    a: torch.Tensor, b: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    n = max(a.size(0), b.size(0))
+    d = max(a.size(1) if a.dim() > 1 else 0, b.size(1) if b.dim() > 1 else 0)
+
+    if a.size(0) < n:
+        a = F.pad(a, (0, 0, 0, n - a.size(0)))
+    if b.size(0) < n:
+        b = F.pad(b, (0, 0, 0, n - b.size(0)))
+    if a.size(1) < d:
+        a = F.pad(a, (0, d - a.size(1)))
+    if b.size(1) < d:
+        b = F.pad(b, (0, d - b.size(1)))
+    return a, b
+
+
+def _pad_rows(matrix: torch.Tensor, size: int) -> torch.Tensor:
+    if matrix.size(0) == size:
+        return matrix
+    return F.pad(matrix, (0, 0, 0, size - matrix.size(0)))
+
+
 # ---------------------------------------------------------------------------
 # Metrics: CLEAR proximity and evaluation with classifier
 # ---------------------------------------------------------------------------
@@ -47,7 +80,13 @@ def compute_proximity(
     dict with keys 'dist_x', 'dist_a', 'proximity'
     """
     device = feat_orig.device
-    adj_cf_prob = adj_cf_prob if adj_cf_prob is not None else adj_cf
+    if adj_cf_prob is None:
+        adj_cf_prob = adj_cf
+
+    feat_orig, feat_cf = _pad_feature_dimensions(feat_orig, feat_cf)
+    adj_orig = _pad_adj(adj_orig, feat_orig.size(0))
+    adj_cf = _pad_adj(adj_cf, feat_orig.size(0))
+    adj_cf_prob = _pad_adj(adj_cf_prob, feat_orig.size(0))
 
     # Feature distance: pairwise L2 distance
     n = feat_orig.shape[0]
@@ -165,24 +204,12 @@ def matched_diff_to_edits(
         feat_cf.size(0),
     )
 
-    def _pad_adj(matrix: torch.Tensor, size: int) -> torch.Tensor:
-        if matrix.size(0) == size and matrix.size(1) == size:
-            return matrix
-        return F.pad(
-            matrix,
-            (0, size - matrix.size(1), 0, size - matrix.size(0)),
-            value=0.0,
-        )
-
-    def _pad_feat(matrix: torch.Tensor, size: int) -> torch.Tensor:
-        if matrix.size(0) == size:
-            return matrix
-        return F.pad(matrix, (0, 0, 0, size - matrix.size(0)), value=0.0)
+    feat_orig, feat_cf = _pad_feature_dimensions(feat_orig, feat_cf)
 
     A = _pad_adj(adj_orig[:n, :n], n)
-    X = _pad_feat(feat_orig[:n], n)
+    X = _pad_rows(feat_orig[:n], n)
     Acf = _pad_adj(adj_cf[:n, :n], n)
-    Xcf = _pad_feat(feat_cf[:n], n)
+    Xcf = _pad_rows(feat_cf[:n], n)
 
     A = (A > adj_threshold).float()
     Acf = (Acf > adj_threshold).float()

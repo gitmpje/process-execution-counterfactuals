@@ -20,19 +20,12 @@ class GATGraphLevel(nn.Module):
         num_layers: int = 1,
         heads: int = 8,
         dropout: float = 0.6,
+        pool_max: bool = False,
     ):
         super().__init__()
 
         self.dropout = dropout
-
-        self.batch_norms = nn.ModuleList(
-            [
-                nn.BatchNorm1d(
-                    hidden_channels * heads if i < num_layers - 1 else hidden_channels
-                )
-                for i in range(num_layers)
-            ]
-        )
+        self.pool_max = pool_max
 
         self.gat_convs = nn.ModuleList()
         current_in = in_channels
@@ -50,10 +43,9 @@ class GATGraphLevel(nn.Module):
             )
             current_in = hidden_channels if is_last else hidden_channels * heads
 
-        pool_dim = hidden_channels * 2  # if using mean+max concat
+        pool_dim = hidden_channels * 2 if self.pool_max else hidden_channels
         self.classifier = nn.Sequential(
             nn.Linear(pool_dim, pool_dim // 2),
-            nn.BatchNorm1d(pool_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(pool_dim // 2, out_channels),
@@ -71,16 +63,16 @@ class GATGraphLevel(nn.Module):
         Returns:
             Graph-level predictions, shape [num_graphs, out_channels]
         """
-        for i, gat_conv in enumerate(self.gat_convs):
+        for gat_conv in self.gat_convs:
             x = gat_conv(x, edge_index)
-            x = self.batch_norms[i](x)
             x = torch.nn.functional.elu(x)
             x = torch.nn.functional.dropout(x, p=self.dropout, training=self.training)
 
         # Pool all node embeddings into one vector per graph.
-        graph_emb = torch.cat(
-            [global_mean_pool(x, batch), global_max_pool(x, batch)], dim=-1
-        )
+        pool = [global_mean_pool(x, batch)]
+        if self.pool_max:
+            pool.append(global_max_pool(x, batch))
+        graph_emb = torch.cat(pool, dim=-1)
 
         return self.classifier(graph_emb)
 

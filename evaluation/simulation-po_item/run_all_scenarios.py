@@ -111,6 +111,7 @@ def run_scenario(number, outdir, script_path):
 
     print(f"  ✓ Simulation scenario {number:02d} completed in {elapsed:.1f}s")
 
+
 def run_scripts(number, script_path, scripts: List[str], run_id: str):
     # Use scenario CONFIG output_prefix for scripts.
     output_prefix = _read_scenario_output_prefix(script_path)
@@ -121,8 +122,10 @@ def run_scripts(number, script_path, scripts: List[str], run_id: str):
         **os.environ,
         "PYTHONPATH": SIM_DIR,
         "SCENARIO_PREFIX": output_prefix,
-        "RUN_ID": run_id,
     }
+    if run_id is not None:
+        env["RUN_ID"] = run_id
+
     for pipeline_script in scripts:
         t0_step = time.time()
         print(f"  ---> Running {pipeline_script} for scenario {number}...")

@@ -22,23 +22,14 @@ class HANGraphLevel(nn.Module):
         num_layers=1,
         heads=8,
         dropout=0.6,
-        pooling_method: str = "mean",
+        pool_max: bool = False,
     ):
         super().__init__()
 
         self.dropout = dropout
         self.viewpoint = viewpoint
         self.metadata = metadata
-        self.pooling_method = pooling_method
-
-        node_types = metadata[0]
-        self.batch_norms = nn.ModuleDict(
-            {
-                f"{node_type}_layer{i}": nn.BatchNorm1d(hidden_channels)
-                for i in range(num_layers)
-                for node_type in node_types
-            }
-        )
+        self.pool_max = pool_max
 
         self.han_convs = nn.ModuleList()
         current_in = in_channels
@@ -55,10 +46,9 @@ class HANGraphLevel(nn.Module):
 
             current_in = hidden_channels
 
-        pool_dim = hidden_channels * 2  # if using mean+max concat
+        pool_dim = hidden_channels * 2 if self.pool_max else hidden_channels
         self.classifier = nn.Sequential(
             nn.Linear(pool_dim, pool_dim // 2),
-            nn.BatchNorm1d(pool_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(pool_dim // 2, out_channels),
@@ -76,7 +66,7 @@ class HANGraphLevel(nn.Module):
         Returns:
             Graph-level predictions (one per graph in batch)
         """
-        for i, han_conv in enumerate(self.han_convs):
+        for han_conv in self.han_convs:
             x_dict = han_conv(x_dict, edge_index_dict)
 
             out_dim = han_conv.out_channels
@@ -86,8 +76,6 @@ class HANGraphLevel(nn.Module):
                 if x is None or x.numel() == 0:
                     x_dict_clean[node_type] = torch.zeros((0, out_dim), device=device)
                 else:
-                    bn_key = f"{node_type}_layer{i}"
-                    x = self.batch_norms[bn_key](x)
                     x = torch.nn.functional.elu(x)
                     x = torch.nn.functional.dropout(
                         x, p=self.dropout, training=self.training
@@ -110,15 +98,11 @@ class HANGraphLevel(nn.Module):
                 continue
 
             # Global pool results
-            pooled.append(
-                torch.cat(
-                    [
-                        global_mean_pool(x, batch_dict[node_type], size=batch_size),
-                        global_max_pool(x, batch_dict[node_type], size=batch_size),
-                    ],
-                    dim=-1,
-                )
-            )
+            pool = [global_mean_pool(x, batch_dict[node_type], size=batch_size)]
+            if self.pool_max:
+                pool.append(global_max_pool(x, batch_dict[node_type], size=batch_size))
+
+            pooled.append(torch.cat(pool, dim=-1))
 
         if pooled:
             # Average over node types
