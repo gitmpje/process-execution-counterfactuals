@@ -95,6 +95,7 @@ def extract_process_execution(
     object_types: List[str],
     target_activity_type: str = None,
     backward: bool = True,
+    exclude_target_activity: bool = False,
 ) -> ProcessExecution:
     """
     G (Graph): NetworkX OCEL graph to extract process execution from;
@@ -163,6 +164,14 @@ def extract_process_execution(
     object_graph = subgraph(G, objects_traced)
     selected_graph = MultiDiGraph(edge_subgraph(G, edges_traced))
     selected_graph.add_edges_from(object_graph.edges(data=True))
+
+    # Remove event of target activity type
+    nodes_to_remove = []
+    if exclude_target_activity:
+        for n, d in selected_graph.nodes(data="attr"):
+            if d.get("ocel:activity") == target_activity_type:
+                nodes_to_remove.append(n)
+        selected_graph.remove_nodes_from(nodes_to_remove)
 
     return ProcessExecution(selected_graph)
 

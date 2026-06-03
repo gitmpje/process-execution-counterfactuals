@@ -20,7 +20,7 @@ class Metadata:
     normalized: bool
     one_hot_encoding: bool
     add_reverse_edges: bool
-    unique_node_type_attribute_columns: bool=False
+    unique_node_type_attribute_columns: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -57,7 +57,9 @@ class Metadata:
             normalized=metadata_dict.get("normalized", False),
             one_hot_encoding=metadata_dict.get("one_hot_encoding", False),
             add_reverse_edges=metadata_dict.get("add_reverse_edges", False),
-            unique_node_type_attribute_columns=metadata_dict.get("unique_node_type_attribute_columns", False),
+            unique_node_type_attribute_columns=metadata_dict.get(
+                "unique_node_type_attribute_columns", False
+            ),
         )
 
 
@@ -217,11 +219,11 @@ def construct_node_cat_keys(
                 df_t.select_dtypes(exclude=["number"]).dropna(axis=1).columns.tolist()
             )
             cols_t = [c for c in cols_t if c not in exclude_attributes]
-            event_cat_keys[obj_type][col] = {}
+            event_cat_keys[event_type][col] = {}
             for col in cols_t:
                 unique_values = df_t[col].dropna().unique().tolist()
                 if unique_values:
-                    event_cat_keys[obj_type][col] = unique_values
+                    event_cat_keys[event_type][col] = unique_values
         else:
             event_cat_keys[event_type] = {}
 
@@ -249,6 +251,7 @@ def build_process_execution_dataset(
     homogeneous: bool = False,
     unique_node_type_attribute_columns: bool = False,
     path_pe_dataset: Optional[str] = None,
+    exclude_target_activity: bool = False,
 ) -> Tuple[List[Data | HeteroData], Metadata]:
     """
     Build a dataset from process executions in an OCEL graph.
@@ -261,9 +264,9 @@ def build_process_execution_dataset(
 
     Args:
         ocel_nx: NetworkX OCEL graph to extract process executions from.
-        object_types: List of object types to consider in the trace.
-        target_activity_type: Activity type to end the trace. Can be None for full traces.
-        backward: Whether to trace backward (True) or forward (False).
+        trace_object_types: List of object types to consider in the trace.
+        trace_target_activity_type: Activity type to end the trace. Can be None for full traces.
+        trace_backward: Whether to trace backward (True) or forward (False).
         graph_y_function: Optional callable that determines the target value for each graph.
             Should take (graph, event_id) and return an int/float/None.
             If None, y values will be set to NaN and can be filled later.
@@ -278,6 +281,7 @@ def build_process_execution_dataset(
         normalize: Whether to normalize numeric features.
         one_hot_encoding: Whether categorical attributes are one-hot encoded.
         homogeneous: Whether to convert the dataset to homogeneous Data objects.
+        exclude_target_activity: Whether to exclude the target activity from the trace.
 
     Returns:
         Tuple of (dataset, metadata) where:
@@ -303,6 +307,7 @@ def build_process_execution_dataset(
                 trace_object_types,
                 trace_target_activity_type,
                 backward=trace_backward,
+                exclude_target_activity=exclude_target_activity,
             )
 
             # Build HeteroData graph

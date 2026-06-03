@@ -14,7 +14,7 @@ from gnn.han_graph_level import HANGraphLevel, HANConvTrainerGraphLevel
 from gnn.utils import Metadata
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
@@ -27,6 +27,9 @@ path_metadata = dataset_cfg["path_metadata"]
 gnn_cfg = cfg["gnn"]
 path_model = gnn_cfg["path_model"]
 homogeneous = gnn_cfg.get("homogeneous", False)
+unique_node_type_attribute_columns = gnn_cfg.get(
+    "unique_node_type_attribute_columns", False
+)
 num_layers = gnn_cfg["num_layers"]
 batch_size = gnn_cfg["batch_size"]
 dropout = gnn_cfg["dropout"]
@@ -47,9 +50,15 @@ with open(path_metadata, "r") as f:
     metadata_dict = json.load(f)
 metadata = Metadata.from_dict(metadata_dict)
 
+metadata.unique_node_type_attribute_columns = unique_node_type_attribute_columns
+metadata_dict = metadata.to_dict()
+with open(path_metadata, "w") as f:
+    json.dump(metadata_dict, f)
+
 if homogeneous:
     _dataset = []
-    for data in dataset:
+    while len(dataset) > 0:
+        data = dataset.pop(0)
         _data = to_homogeneous_data(
             data,
             metadata.node_num_keys,
@@ -59,31 +68,16 @@ if homogeneous:
             metadata.unique_node_type_attribute_columns,
         )
         _data.y = data.y
+        del data
         _dataset.append(_data)
     dataset = _dataset
 
-labels = [data.y for data in dataset]
-class_weights = torch.tensor([sum(labels) / (len(labels) - sum(labels)), 1.0], device=device)
 train_idx, test_idx = train_test_split(
     list(range(len(dataset))),
     test_size=0.1,
     random_state=1,
-    stratify=labels,
 )
-
-train_labels = [labels[i] for i in train_idx]
-train_idx, val_idx = train_test_split(
-    train_idx,
-    test_size=0.1,
-    random_state=1,
-    stratify=train_labels,
-)
-
-# Oversample minority samples (to deal with class imbalance)
-train_minority_idx = [i for i in train_idx if labels[i] == 0]
-oversampled_idx = train_idx + train_minority_idx * int(
-    class_weights[0] / len(train_minority_idx)
-)
+train_idx, val_idx = train_test_split(train_idx, test_size=0.1, random_state=1)
 
 train_ds = Subset(dataset, train_idx)
 val_ds = Subset(dataset, val_idx)
@@ -103,7 +97,7 @@ if homogeneous:
     trainer = GATConvTrainerGraphLevel(
         model=model,
         device=device,
-        criterion=torch.nn.CrossEntropyLoss(class_weights),  # weight=class_weights
+        criterion=torch.nn.CrossEntropyLoss(),
         output_type="binary",
     )
 else:
@@ -119,7 +113,7 @@ else:
         model=model,
         viewpoint=metadata.viewpoint,
         device=device,
-        criterion=torch.nn.CrossEntropyLoss(class_weights),  # weight=class_weights
+        criterion=torch.nn.CrossEntropyLoss(),
         output_type="binary",
         learning_rate=learning_rate,
     )

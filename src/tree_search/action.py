@@ -1,5 +1,5 @@
 from itertools import combinations
-from math import ceil, comb
+from math import ceil, comb, isclose
 from copy import deepcopy
 from networkx import NetworkXError
 from pm4py.objects.ocel.constants import DEFAULT_EVENT_ACTIVITY, DEFAULT_OBJECT_TYPE
@@ -155,7 +155,7 @@ class NodeAttributeNumeric(Action):
                 if (change_size > change_lower) and (change_size <= change_upper):
                     yield change_value
 
-                if self.value_original + change_value == self.value_max:
+                if isclose(self.value_original + change_value, self.value_max):
                     break
 
     def apply_change(self, p: ProcessExecution, delta_value: Any) -> Any:

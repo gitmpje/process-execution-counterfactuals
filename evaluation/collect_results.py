@@ -56,9 +56,10 @@ def check_edit(node_feat_edit_str: str, threshold: float):
 # %%
 # Configuration: specify which child folders to process
 CHILD_FOLDERS = [
+    "sepsis",
     # "road_traffic_fine_management",
     # "simulation-po_item",
-    "socel_hinge",
+    # "socel_hinge",
 ]
 SCENARIO_PREFIXES = {
     "simulation-po_item": [
@@ -168,6 +169,8 @@ for child_folder in CHILD_FOLDERS:
                 "df": df,
             }
         )
+
+# run_data = [r for r in run_data if not r["run"]]
 
 
 # %%
@@ -386,7 +389,7 @@ def aggregate_hetero_stats(graphs: List[HeteroData]) -> Dict[str, Any]:
 
 report_stats = []
 for data_file in [
-    "bpi_2011/data/dataset-pe.pt",
+    "sepsis/data/dataset-pe.pt",
     # "road_traffic_fine_management/data/dataset-pe.pt",
     # "socel_hinge/data/dataset-pe-MalePart.pt",
     # "socel_hinge/data/dataset-pe-HingePack.pt",
@@ -411,10 +414,10 @@ import json
 from gnn.utils import Metadata
 
 for metadata_file in [
-    "bpi_2011/data/metadata-pe.json",
-    "road_traffic_fine_management/data/metadata-pe.json",
-    "socel_hinge/data/metadata-pe-MalePart.json",
-    "socel_hinge/data/metadata-pe-HingePack.json",
+    "sepsis/data/metadata-pe.json",
+    # "road_traffic_fine_management/data/metadata-pe.json",
+    # "socel_hinge/data/metadata-pe-MalePart.json",
+    # "socel_hinge/data/metadata-pe-HingePack.json",
 ]:
     with open(metadata_file, "r") as f:
         metadata_dict = json.load(f)
