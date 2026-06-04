@@ -99,6 +99,7 @@ if homogeneous:
         out_channels=2,
         num_layers=num_layers,
         dropout=dropout,
+        pool_max=True,
     )
     trainer = GATConvTrainerGraphLevel(
         model=model,
@@ -114,6 +115,7 @@ else:
         dropout=dropout,
         viewpoint=metadata.viewpoint,
         metadata=[metadata.node_types, metadata.edge_types],
+        pool_max=True,
     )
     trainer = HANConvTrainerGraphLevel(
         model=model,

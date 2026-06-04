@@ -21,7 +21,7 @@ from gnn.utils import (
 from utils import clean_ocel_dataset
 
 ### Configuration ###
-config_file = os.path.join(os.path.dirname(__file__), "config_HingePack.yaml")
+config_file = os.path.join(os.path.dirname(__file__), "config_MalePart.yaml")
 with open(config_file) as f:
     cfg = yaml.safe_load(f)
 
