@@ -56,10 +56,12 @@ def check_edit(node_feat_edit_str: str, threshold: float):
 # %%
 # Configuration: specify which child folders to process
 CHILD_FOLDERS = [
-    "sepsis",
-    # "road_traffic_fine_management",
     # "simulation-po_item",
     # "socel_hinge",
+    # "sepsis",
+    # "road_traffic_fine_management",
+    "bpi_2017",
+    # "logistics",
 ]
 SCENARIO_PREFIXES = {
     "simulation-po_item": [
@@ -103,9 +105,13 @@ def find_result_files(child_folder, scenario_prefixes=None):
 
 
 def parse_scenario_method(file_path):
-    base = file_path.rsplit("/", 1)[-1]
+    base = Path(file_path).name
     if base.endswith(".json"):
         base = base[:-5]
+
+    # Strip a trailing dotted run suffix such as '.1' or '.42'.
+    base = re.sub(r"\.(\d+)$", "", base)
+
     if "-" not in base:
         return base, None
     scenario, method = base.split("-", 1)
@@ -114,9 +120,16 @@ def parse_scenario_method(file_path):
 
 def parse_scenario_method_run(file_name):
     base = Path(file_name).stem
-    match = re.fullmatch(r"(scenario_[0-9]+)-(.+?)(?:-run(\d+))?", base)
+    match = re.fullmatch(
+        r"(?P<scenario>.+?)-(?P<method>.+?)(?:-run(?P<run_id>\d+)|\.(?P<dot_run_id>\d+))?",
+        base,
+    )
     if match:
-        return match.group(1), match.group(2), match.group(3)
+        return (
+            match.group("scenario"),
+            match.group("method"),
+            match.group("run_id") or match.group("dot_run_id"),
+        )
     scenario, method = parse_scenario_method(file_name)
     return scenario, method, None
 
@@ -138,10 +151,10 @@ for child_folder in CHILD_FOLDERS:
                 )
                 continue
             df[key] = df["proximity_metrics"].apply(
-                lambda x: x.get(key) if x else float("nan")
+                lambda x: x.get(key) if isinstance(x, dict) else float("nan")
             )
             df[f"proximity_all-{key}"] = df["proximity_metrics_all"].apply(
-                lambda x: average_metric(list(x.values()), key) if x else float("nan")
+                lambda x: average_metric(list(x.values()), key) if isinstance(x, dict) else float("nan")
             )
 
         df.fillna({"evaluation_valid": 1.0}, inplace=True)
@@ -389,10 +402,12 @@ def aggregate_hetero_stats(graphs: List[HeteroData]) -> Dict[str, Any]:
 
 report_stats = []
 for data_file in [
-    "sepsis/data/dataset-pe.pt",
-    # "road_traffic_fine_management/data/dataset-pe.pt",
     # "socel_hinge/data/dataset-pe-MalePart.pt",
     # "socel_hinge/data/dataset-pe-HingePack.pt",
+    # "sepsis/data/dataset-pe.pt",
+    # "road_traffic_fine_management/data/dataset-pe.pt",
+    "bpi_2017/data/dataset-pe.pt",
+    # "logistics/data/dataset-pe.pt",
 ]:
     dataset = torch.load(data_file, weights_only=False)
     print(f"Calculating statistics for {data_file}")

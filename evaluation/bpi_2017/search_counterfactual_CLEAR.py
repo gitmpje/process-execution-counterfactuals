@@ -229,8 +229,8 @@ for viewpoint_id in viewpoint_ids:
     print("Viewpoint id:", viewpoint_id)
 
     events = set([e for e, _ in ocel_nx.in_edges(viewpoint_id)])
-    nodes = events | {viewpoint_id}
-    process_execution = ocel_nx.subgraph(nodes).copy()
+    objects = set([o for e in events for _, o, d in ocel_nx.out_edges(e, data="attr") if d["type"] == "E2O"])
+    process_execution = ocel_nx.subgraph(events | objects).copy()
 
     counterfactual_label = not process_outcome(process_execution)
     if counterfactual_label == viewpoint_label:
@@ -258,7 +258,7 @@ print("counterfactual_label =", not viewpoint_label)
 def save_results(results):
     run_id = os.getenv("RUN_ID")
     file_name = os.path.basename(os.path.dirname(__file__))
-    with open(f"results/{file_name}{f'-{run_id}' if run_id else ''}.json", "w") as f:
+    with open(f"results/{file_name}-CLEAR{f'-{run_id}' if run_id else ''}.json", "w") as f:
         json.dump(results, f)
 
 

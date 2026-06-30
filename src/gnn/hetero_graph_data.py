@@ -230,10 +230,16 @@ def build_hetero_data(
     for t in node_types:
         values = graph_dict[t]
         if not values:
-            continue
-        hetero_data[t].x = torch.tensor(values, dtype=torch.float32).reshape(
-            len(values), -1
-        )
+            # Create an empty tensor for node features if there are no nodes of this type
+            tensor_x = torch.tensor([0], dtype=torch.float32).reshape(
+                1, -1
+            )
+        else:
+            tensor_x = torch.tensor(values, dtype=torch.float32).reshape(
+                len(values), -1
+            )
+
+        hetero_data[t].x = tensor_x
 
     hetero_data[viewpoint].y = torch.tensor(graph_dict["y"]).reshape(-1, 1)
 

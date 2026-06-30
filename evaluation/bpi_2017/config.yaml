@@ -1,0 +1,59 @@
+dataset:
+  path_xes: "data/BPI Challenge 2017 - Offer log.xes.gz"
+  path_ocel: "data/BPIC17.json"
+  path_dataset: "data/dataset-pe.pt"
+  path_labels: "data/labels.json"
+  path_metadata: "data/metadata-pe.json"
+  path_sample: "data/sample_objects.txt"
+  exclude_attributes:
+    - "ocel:eid"
+    - "ocel:timestamp"
+    - "ocel:oid"
+    - "ocel:type"
+    - "case:Accepted"
+    - "EventID"
+    - "case:ApplicationID"
+    - "org:resource"
+    - "OfferID"
+  normalize: True
+  one_hot_encoding: True
+  add_reverse_edges: True
+
+process_execution:
+  viewpoint: "case:concept:name"
+  object_types:
+    - "case:concept:name"
+
+gnn:
+  path_model: "data/model-pe.pth"
+  homogeneous: True
+  num_layers: 1
+  batch_size: 10
+  dropout: 0.1
+  n_epochs: 100
+  start_patience: 25
+  learning_rate: 0.01
+
+counterfactual:
+  # verbose: True
+  # viewpoint_id: "Offer_169742869"
+  viewpoint_label: False
+  depth_first: "node"
+  num_bins: 2
+  max_change_size: 3
+  node_importance_threshold: 0.01
+  attr_importance_threshold: 0.01
+  category_importance_threshold: 0.01
+
+counterfactual_graphcfe:
+  path_model: "data/model_graphcfe.pth"
+  vae_type: "graphVAE"
+  sample_size: 500
+  dim_h: 64
+  dim_z: 32
+  dropout: 0.1
+  disable_u: False
+  batch_size: 10
+  n_epochs: 200
+  learning_rate: 0.01
+  patience: 40
