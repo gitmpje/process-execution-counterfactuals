@@ -190,7 +190,7 @@ def save_results(results):
 
 
 results = []
-for viewpoint_id in viewpoint_ids[viewpoint_ids.index("reg_co134"):]: # reg_co112 
+for viewpoint_id in viewpoint_ids:
     print("Viewpoint id:", viewpoint_id)
 
     target_process_execution = deepcopy(

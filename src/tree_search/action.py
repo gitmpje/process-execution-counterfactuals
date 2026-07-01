@@ -722,8 +722,24 @@ class EventNodeMove(Action):
         p.add_edge(target_event_id, self.event_id, attr={"type": "DF"})
         record["added_edges"].append((target_event_id, self.event_id, 0))
 
-        # connect self.event_id to target's old successors
-        for _, v, _, d in target_out:
+        # Connect the moved event to the successor chain that should follow it
+        # after the insertion point. If the target's old successor chain points
+        # back to the moved event, fall back to the moved event's original
+        # successors so we preserve the tail of the process instead of creating
+        # a self-loop.
+        successor_edges = [
+            (u, v, k, d)
+            for u, v, k, d in target_out
+            if v != self.event_id
+        ]
+        if not successor_edges:
+            successor_edges = [
+                (u, v, k, d)
+                for u, v, k, d in self_out
+                if v != self.event_id
+            ]
+
+        for _, v, _, d in successor_edges:
             p.add_edge(self.event_id, v, attr=d.get("attr", {}).copy())
             record["added_edges"].append((self.event_id, v, 0))
 

@@ -50,6 +50,7 @@ def to_dense(
         data.edge_index,
         max_num_nodes=max_num_nodes,
     )  # (1, max_num_nodes, max_num_nodes)
+    adj_dense = adj_dense.clamp(0.0, 1.0)
 
     if data.x is not None:
         x = data.x[:n_real]

@@ -239,6 +239,25 @@ def test_event_node_move_apply_and_undo():
     assert p.nodes["e2"]["attr"]["epoch"] == 2
 
 
+def test_event_node_move_does_not_create_self_loop_when_target_points_to_moved_node():
+    p = ProcessExecution()
+    p.add_node("e0", attr={"type": "EVENT"})
+    p.add_node("e1", attr={"type": "EVENT"})
+    p.add_node("e2", attr={"type": "EVENT"})
+    p.add_node("e3", attr={"type": "EVENT"})
+
+    p.add_edge("e0", "e2", attr={"type": "DF"})
+    p.add_edge("e2", "e1", attr={"type": "DF"})
+    p.add_edge("e1", "e3", attr={"type": "DF"})
+
+    action = EventNodeMove(event_id="e1", target_events=["e2"])
+    action.apply_change(p, "e2")
+
+    assert not p.has_edge("e1", "e1")
+    assert p.has_edge("e2", "e1")
+    assert p.has_edge("e1", "e3")
+
+
 def test_event_node_deletion_apply():
     p = ProcessExecution()
     p.add_node("e1", attr={"type": "EVENT"})

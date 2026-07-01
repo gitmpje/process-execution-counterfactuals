@@ -47,6 +47,10 @@ def _pad_rows(matrix: torch.Tensor, size: int) -> torch.Tensor:
     return F.pad(matrix, (0, 0, 0, size - matrix.size(0)))
 
 
+def _clamp_probability_tensor(tensor: torch.Tensor) -> torch.Tensor:
+    return tensor.float().clamp(0.0, 1.0)
+
+
 # ---------------------------------------------------------------------------
 # Metrics: CLEAR proximity and evaluation with classifier
 # ---------------------------------------------------------------------------
@@ -84,9 +88,9 @@ def compute_proximity(
         adj_cf_prob = adj_cf
 
     feat_orig, feat_cf = _pad_feature_dimensions(feat_orig, feat_cf)
-    adj_orig = _pad_adj(adj_orig, feat_orig.size(0))
-    adj_cf = _pad_adj(adj_cf, feat_orig.size(0))
-    adj_cf_prob = _pad_adj(adj_cf_prob, feat_orig.size(0))
+    adj_orig = _clamp_probability_tensor(_pad_adj(adj_orig, feat_orig.size(0)))
+    adj_cf = _clamp_probability_tensor(_pad_adj(adj_cf, feat_orig.size(0)))
+    adj_cf_prob = _clamp_probability_tensor(_pad_adj(adj_cf_prob, feat_orig.size(0)))
 
     # Feature distance: pairwise L2 distance
     n = feat_orig.shape[0]

@@ -422,22 +422,3 @@ for data_file in [
     stats["avg_object_nodes"] = n_objects / numbers["total_graphs"]
 
     report_stats.append(stats)
-
-# %% Attribute statistics
-import json
-
-from gnn.utils import Metadata
-
-for metadata_file in [
-    "sepsis/data/metadata-pe.json",
-    # "road_traffic_fine_management/data/metadata-pe.json",
-    # "socel_hinge/data/metadata-pe-MalePart.json",
-    # "socel_hinge/data/metadata-pe-HingePack.json",
-]:
-    with open(metadata_file, "r") as f:
-        metadata_dict = json.load(f)
-    metadata = Metadata.from_dict(metadata_dict)
-
-    print(metadata_file)
-    print("EA:", sum(len(v) for v in metadata.node_cat_keys["EVENT"].values()))
-    print("EO:", sum(len(v) for v in metadata.node_cat_keys["OBJECT"].values()))
