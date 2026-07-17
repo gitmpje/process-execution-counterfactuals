@@ -17,6 +17,7 @@ from tree_search.action_set import ActionSet
 from tree_search.action import (
     NodeAttributeNumeric,
     EventNodeDeletion,
+    EventNodeMove,
     EventNodeSubstitution,
     EventNodeInsertion,
     ObjectNodeInsertion,
@@ -149,6 +150,48 @@ def test_action_set_conflict_prevents_event_insertion_on_deleted_event():
     )
 
     assert not a.is_change_allowed(insertion, {"type": "EVENT", "ocel:activity": "new"}, p)
+
+
+def test_action_set_undo_restores_move_and_deletion_state():
+    p = ProcessExecution()
+    for node_id, attrs in [
+        ("a", {"type": "EVENT", "ocel:activity": "A", "ocel:timestamp": "t1", "epoch": 1}),
+        ("b", {"type": "EVENT", "ocel:activity": "B", "ocel:timestamp": "t2", "epoch": 2}),
+        ("c", {"type": "EVENT", "ocel:activity": "C", "ocel:timestamp": "t3", "epoch": 3}),
+    ]:
+        p.add_node(node_id, attr=attrs)
+
+    p.add_edge("a", "b", attr={"type": "DF"})
+    p.add_edge("b", "c", attr={"type": "DF"})
+    p.add_edge("a", "c", attr={"type": "DF"})
+
+    original = deepcopy(p)
+    move_action = EventNodeMove(event_id="b", target_events=["c"])
+    delete_action = EventNodeDeletion(deletion_options=[["b"]])
+    action_set = ActionSet(
+        event_move={move_action: "c"},
+        node_deletion={delete_action: ["b"]},
+    )
+
+    p_after, record = action_set.apply_changes(p)
+    action_set.undo_changes(p_after, record)
+
+    assert p_after.has_node("b")
+    assert p_after.nodes["b"]["attr"]["ocel:timestamp"] == "t2"
+    assert p_after.nodes["b"]["attr"]["epoch"] == 2
+    assert p_after.nodes["c"]["attr"]["ocel:timestamp"] == "t3"
+    assert p_after.nodes["c"]["attr"]["epoch"] == 3
+
+    assert {node_id for node_id, _ in p_after.nodes(data=True)} == {
+        node_id for node_id, _ in original.nodes(data=True)
+    }
+    assert {
+        (u, v, str(sorted(d.items())))
+        for u, v, d in p_after.edges(data=True)
+    } == {
+        (u, v, str(sorted(d.items())))
+        for u, v, d in original.edges(data=True)
+    }
 
 
 def test_action_set_conflict_prevents_object_insertion_on_deleted_event():

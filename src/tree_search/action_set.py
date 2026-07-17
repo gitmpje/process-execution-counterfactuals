@@ -143,32 +143,27 @@ class ActionSet:
         provided record. The process execution `p` is modified in place and
         returned for convenience.
         """
-        # Node attribute modifications
-        for action, undo_info in record.get("node_attributes", {}).items():
-            action.undo_change(p, undo_info)
-
-        # Event moves
-        for action, undo_info in record.get("event_move", {}).items():
-            action.undo_change(p, undo_info)
-
-        # Event substitutions
-        for action, undo_info in record.get("event_substitution", {}).items():
-            action.undo_change(p, undo_info)
-
-        # Object substitutions
-        for action, undo_info in record.get("object_substitution", {}).items():
-            action.undo_change(p, undo_info)
-
-        # Event insertions
-        for action, undo_info in record.get("event_insertion", {}).items():
-            action.undo_change(p, undo_info)
-
-        # Object insertions
+        # Undo in reverse application order so each action restores the state
+        # that existed immediately before it was applied.
         for action, undo_info in record.get("object_insertion", {}).items():
             action.undo_change(p, undo_info)
 
-        # Deletions (nodes and edges)
+        for action, undo_info in record.get("event_insertion", {}).items():
+            action.undo_change(p, undo_info)
+
         for action, undo_info in record.get("node_deletion", {}).items():
+            action.undo_change(p, undo_info)
+
+        for action, undo_info in record.get("object_substitution", {}).items():
+            action.undo_change(p, undo_info)
+
+        for action, undo_info in record.get("event_substitution", {}).items():
+            action.undo_change(p, undo_info)
+
+        for action, undo_info in record.get("event_move", {}).items():
+            action.undo_change(p, undo_info)
+
+        for action, undo_info in record.get("node_attributes", {}).items():
             action.undo_change(p, undo_info)
 
         return p

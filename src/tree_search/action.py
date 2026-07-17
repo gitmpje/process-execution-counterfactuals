@@ -565,7 +565,12 @@ class EventNodeSubstitution(Action):
         for _, v, k, d in subst_out:
             p.add_edge(self.event_id, v, key=k, **{"attr": d.get("attr", {}).copy()})
 
-        # swap timestamps/epoch if present in node attr dicts
+        # preserve the original attribute payloads while swapping the timestamp-like fields
+        if "attr" not in p.nodes[self.event_id]:
+            p.nodes[self.event_id]["attr"] = {}
+        if "attr" not in p.nodes[subst_event_id]:
+            p.nodes[subst_event_id]["attr"] = {}
+
         for key in ["ocel:timestamp", "epoch"]:
             v1 = p.nodes[self.event_id].get("attr", {}).get(key)
             v2 = p.nodes[subst_event_id].get("attr", {}).get(key)
@@ -589,10 +594,16 @@ class EventNodeSubstitution(Action):
         # Restore nodes as they were at snapshot time.
         for nid, attrs in record.get("nodes", {}).items():
             if not p.has_node(nid):
-                p.add_node(nid, **attrs)
+                if isinstance(attrs, dict) and "attr" in attrs:
+                    p.add_node(nid, **attrs)
+                else:
+                    p.add_node(nid, attr=attrs if isinstance(attrs, dict) else {})
             else:
                 p.nodes()[nid].clear()
-                p.nodes()[nid].update(attrs)
+                if isinstance(attrs, dict) and "attr" in attrs:
+                    p.nodes()[nid].update(attrs)
+                else:
+                    p.nodes()[nid]["attr"] = attrs if isinstance(attrs, dict) else {}
 
         # Remove all current edges incident to the involved nodes.
         involved = set(record.get("nodes", {}).keys())
@@ -677,7 +688,9 @@ class EventNodeMove(Action):
             "added_edges": [],
         }
 
-        record["nodes"][self.event_id] = deepcopy(p.nodes[self.event_id])
+        for node_id in (self.event_id, target_event_id):
+            if p.has_node(node_id):
+                record["nodes"][node_id] = deepcopy(p.nodes[node_id])
 
         record["original_edges"] = [
             (u, v, k, deepcopy(d))
@@ -728,22 +741,23 @@ class EventNodeMove(Action):
         # successors so we preserve the tail of the process instead of creating
         # a self-loop.
         successor_edges = [
-            (u, v, k, d)
-            for u, v, k, d in target_out
-            if v != self.event_id
+            (u, v, k, d) for u, v, k, d in target_out if v != self.event_id
         ]
         if not successor_edges:
             successor_edges = [
-                (u, v, k, d)
-                for u, v, k, d in self_out
-                if v != self.event_id
+                (u, v, k, d) for u, v, k, d in self_out if v != self.event_id
             ]
 
         for _, v, _, d in successor_edges:
             p.add_edge(self.event_id, v, attr=d.get("attr", {}).copy())
             record["added_edges"].append((self.event_id, v, 0))
 
-        # swap timestamps/epoch if present in node attr dicts
+        # preserve the original attribute payloads while swapping the timestamp-like fields
+        if "attr" not in p.nodes[self.event_id]:
+            p.nodes[self.event_id]["attr"] = {}
+        if "attr" not in p.nodes[target_event_id]:
+            p.nodes[target_event_id]["attr"] = {}
+
         for key in ["ocel:timestamp", "epoch"]:
             v1 = p.nodes[self.event_id].get("attr", {}).get(key)
             v2 = p.nodes[target_event_id].get("attr", {}).get(key)
@@ -760,10 +774,16 @@ class EventNodeMove(Action):
         # Restore nodes as they were at snapshot time.
         for nid, attrs in record.get("nodes", {}).items():
             if not p.has_node(nid):
-                p.add_node(nid, **attrs)
+                if isinstance(attrs, dict) and "attr" in attrs:
+                    p.add_node(nid, **attrs)
+                else:
+                    p.add_node(nid, attr=attrs if isinstance(attrs, dict) else {})
             else:
                 p.nodes()[nid].clear()
-                p.nodes()[nid].update(attrs)
+                if isinstance(attrs, dict) and "attr" in attrs:
+                    p.nodes()[nid].update(attrs)
+                else:
+                    p.nodes()[nid]["attr"] = attrs if isinstance(attrs, dict) else {}
 
         # Remove added edges.
         for u, v, k in record.get("added_edges", []):
@@ -866,16 +886,34 @@ class NodeDeletion(Action):
             if not p.has_node(node_id):
                 p.add_node(node_id, **attrs)
             else:
+                p.nodes()[node_id].clear()
                 p.nodes()[node_id].update(attrs)
-        for u, v, d in record.get("deleted_edges", []):
-            if not p.has_edge(u, v):
-                p.add_edge(u, v, **d)
-        for u, v, _ in record.get("added_edges", []):
-            if p.has_edge(u, v):
-                try:
-                    p.remove_edge(u, v)
-                except Exception:
-                    pass
+
+        for edge in record.get("deleted_edges", []):
+            if len(edge) == 4:
+                u, v, k, d = edge
+                if not p.has_edge(u, v, key=k):
+                    p.add_edge(u, v, key=k, **d)
+            else:
+                u, v, d = edge
+                if not p.has_edge(u, v):
+                    p.add_edge(u, v, **d)
+
+        for edge in record.get("added_edges", []):
+            if len(edge) == 4:
+                u, v, k, _ = edge
+                if p.has_edge(u, v, key=k):
+                    try:
+                        p.remove_edge(u, v, key=k)
+                    except Exception:
+                        pass
+            else:
+                u, v, _ = edge
+                if p.has_edge(u, v):
+                    try:
+                        p.remove_edge(u, v)
+                    except Exception:
+                        pass
         return p
 
     def apply_change(
@@ -896,17 +934,13 @@ class NodeDeletion(Action):
                 record["deleted_nodes"].append(
                     (deletion_node_id, p.nodes()[deletion_node_id].copy())
                 )
-                # capture any incident edges (both in and out)
+                # capture any incident edges (both in and out) including keys
                 record["deleted_edges"].extend(
                     [
-                        (u, v, d.copy())
-                        for u, v, d in p.in_edges(nbunch=[deletion_node_id], data=True)
-                    ]
-                )
-                record["deleted_edges"].extend(
-                    [
-                        (u, v, d.copy())
-                        for u, v, d in p.out_edges(nbunch=[deletion_node_id], data=True)
+                        (u, v, k, d.copy())
+                        for u, v, k, d in p.edges(
+                            nbunch=[deletion_node_id], keys=True, data=True
+                        )
                     ]
                 )
                 p.remove_node(deletion_node_id)
@@ -1022,10 +1056,7 @@ class EventNodeInsertion(Action):
 
         # Remove the new event node
         if new_event_id and p.has_node(new_event_id):
-            try:
-                p.remove_node(new_event_id)
-            except Exception:
-                pass
+            p.remove_node(new_event_id)
 
         return p
 
@@ -1131,19 +1162,23 @@ class EventNodeDeletion(NodeDeletion):
         for deletion_node_id in deletions:
             target_df_events = [
                 v
-                for u, v, d in base_rec["deleted_edges"]
-                if u == deletion_node_id and d["attr"]["type"] == "DF"
+                for u, v, _, d in base_rec["deleted_edges"]
+                if u == deletion_node_id and d.get("attr", {}).get("type") == "DF"
             ]
-            for u, v, d in base_rec["deleted_edges"]:
-                if v != deletion_node_id or d["attr"]["type"] != "DF":
+
+            for u, v, _, d in base_rec["deleted_edges"]:
+                if v != deletion_node_id or d.get("attr", {}).get("type") != "DF":
                     continue
 
-                added.extend(
-                    [(u, target_event, d) for target_event in target_df_events]
-                )
+                for target_event in target_df_events:
+                    if u == target_event:
+                        continue
+                    added.append((u, target_event, d))
 
         base_rec["added_edges"] = added
-        p.add_edges_from(added)
+        for u, v, d in added:
+            if not p.has_edge(u, v):
+                p.add_edge(u, v, **d)
 
         return base_rec
 
